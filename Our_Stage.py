@@ -48,6 +48,7 @@ import omni.replicator.core as rep
 import omni.timeline
 from omni.isaac.core.world import World
 from omni.isaac.core.utils.extensions import disable_extension, enable_extension
+import time
 
 EXTENSIONS_PEOPLE = [
     'omni.anim.people', 
@@ -66,6 +67,11 @@ EXTENSIONS_PEOPLE = [
 
 for ext_people in EXTENSIONS_PEOPLE:
     enable_extension(ext_people)
+
+# Update the simulation app with the new extensions
+kit.update()
+
+from Pegasus_App import PegasusApp
 
 # CUSTOM_CONTROLLER CONTROL
 class CarterController(BaseController):
@@ -142,16 +148,16 @@ except:
 
 if result:
     omni.usd.get_context().open_stage(usd_path)
-    # wr_stage = omni.usd.get_context().get_stage()
+    wr_stage = omni.usd.get_context().get_stage()
 
     # stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
-    stage = omni.usd.get_context().get_stage()
 else:
     carb.log_error(
         f"the usd path {usd_path} could not be opened, please make sure that {args.usd_path} is a valid usd file in {assets_root_path}"
     )
     kit.close()
     sys.exit()
+
 # Wait two frames so that stage starts loading
 kit.update()
 kit.update()
@@ -185,9 +191,8 @@ carter_bot = WheeledRobot(
     )
 wr_world.scene.add(carter_bot) 
 # carter_bot.enable_gravity()
-carter_bot.set_default_state(position=np.array([-4, -4, 0]))
-carter_bot.set_enabled_self_collisions(True)
-
+# carter_bot.set_default_state(position=np.array([-4, -4, 0]))
+# carter_bot.set_enabled_self_collisions(True)
 
 carter = ArticulationView(prim_paths_expr="/World/Nova_Carter", name="Carter")
 carter = wr_world.scene.get_object("Carter")
@@ -198,8 +203,7 @@ print("Carter in the World")
 carter_camera = Camera(prim_path="/World/Nova_Carter/chassis_link/front_owl/camera", 
                     name='Carter_Camera',
                     frequency=30,
-                    resolution=(512,512),
-                    )
+                    resolution=(512,512))
 carter_camera.initialize()
 kit.update()
 carter_camera.initialize()
@@ -207,8 +211,6 @@ print(f"Carter Camera : {carter_camera}")
 wr_world.initialize_physics()
 
 # CARTER LiDAR
-
-# LIDAR RTX
 carter_lidar = wr_world.scene.add(
     LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
              name="Carter_Lidar"))
@@ -220,8 +222,17 @@ carter_lidar.add_range_data_to_frame()
 carter_lidar.add_point_cloud_data_to_frame()
 carter_lidar.enable_visualization()
 
+# CARTER CONTROLLER
 carter_controller = CarterController()
 print("Controller Created!")
+
+for i in range(2000):
+    kit.update()
+print("launching pegasus")
+
+pg_app = PegasusApp(wr_world, wr_timeline, kit)
+pg_app.run()
+
 
 i = 0
 reset_needed = False
@@ -265,22 +276,6 @@ while kit.is_running():
         #     i = 0
         i += 1
 wr_world.stop()
-
-# i = 0
-# while kit.is_running():
-#     wr_world.step(render=True)
-#     if i % 100 == 0:
-#         act_val = np.random.randint(0,5,1)
-#         bot_act(carter, bot_controller, act_val)
-#         print(carter_camera.get_current_frame())    
-#         imgplot = plt.imshow(carter_camera.get_rgba()[:, :, :3])
-#         plt.show()
-#         print(carter_camera.get_current_frame()["motion_vectors"])
-#     if wr_world.is_playing():
-#         if wr_world.current_time_step_index == 0:
-#             wr_world.reset()
-#     i += 1
-
 print('loop is done!')
 
 # omni.timeline.get_timeline_interface().play()
@@ -295,4 +290,3 @@ else:
         kit.update()
 
 # omni.timeline.get_timeline_interface().stop()
-
