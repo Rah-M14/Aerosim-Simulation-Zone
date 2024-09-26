@@ -28,25 +28,14 @@ from pxr import Usd, Vt, Gf
 
 import omni.kit.viewport.utility
 from omni.isaac.core import World, SimulationContext
-from omni.isaac.core.utils import stage
-from omni.isaac.core.scenes import Scene
-from omni.isaac.core.prims import XFormPrimView
-from omni.isaac.wheeled_robots.robots import WheeledRobot
-from omni.isaac.wheeled_robots.controllers import DifferentialController, WheelBasePoseController
-from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.core.controllers import BaseController
-from omni.isaac.sensor import Camera
-from omni.isaac.sensor import LidarRtx
-# from omni.isaac.range_sensor import _range_sensor 
-from omni.isaac.range_sensor._range_sensor import acquire_lidar_sensor_interface
+# from omni.isaac.core.utils import stage
+# from omni.isaac.core.scenes import Scene
+# from omni.isaac.core.prims import XFormPrimView
 from omni.isaac.nucleus import get_assets_root_path, is_file
-from omni.isaac.core.utils.extensions import enable_extension
 
 import omni.isaac.core.utils.numpy.rotations as rot_utils
 import omni.replicator.core as rep
 import omni.timeline
-from omni.isaac.core.world import World
 from omni.isaac.core.utils.extensions import disable_extension, enable_extension
 import time
 
@@ -71,65 +60,9 @@ for ext_people in EXTENSIONS_PEOPLE:
 # Update the simulation app with the new extensions
 kit.update()
 
+from RL_Bot import RLBot
+from RL_Bot_Control import RLBotController, RLBotAct
 from Pegasus_App import PegasusApp
-
-# CUSTOM_CONTROLLER CONTROL
-class CarterController(BaseController):
-    def __init__(self):
-        super().__init__(name="carter_controller")
-        self._wheel_radius = 0.41
-        self._wheel_base = 0.413
-        return
-
-    def forward(self, command):
-        # command will have two elements, first element is the forward velocity & second element is the angular velocity (yaw only).
-        joint_velocities = [0.0, 0.0, 0.0, 0.0]
-        joint_velocities[0] = (((2 * command[0])/(self._wheel_radius)) - ((command[1] * self._wheel_base))/(2 * self._wheel_radius))
-        joint_velocities[1] = (((2 * command[0])/(self._wheel_radius)) + ((command[1] * self._wheel_base))/(2 * self._wheel_radius))
-        joint_velocities[2] = (((2 * command[0])/(self._wheel_radius)) - ((command[1] * self._wheel_base))/(2 * self._wheel_radius))
-        joint_velocities[3] = (((2 * command[0])/(self._wheel_radius)) + ((command[1] * self._wheel_base))/(2 * self._wheel_radius))
-        return ArticulationAction(joint_velocities=joint_velocities)
-
-# CONTROLLER CONTROL
-def go_forward(bot, controller, n_steps=5):
-    for _ in range(n_steps):
-        bot.apply_wheel_actions(controller.forward(np.array([1, 0])))
-    return None
-
-def go_backward(bot, controller, n_steps=5):
-    for _ in range(n_steps):
-        bot.apply_wheel_actions(controller.forward(np.array([-1, 0])))
-    return None
-
-def turn_right(bot, controller, n_steps=20):
-    for _ in range(n_steps):
-        bot.apply_wheel_actions(controller.forward(np.array([0, -np.pi/2])))
-    return None
-
-def turn_left(bot, controller, n_steps=20):
-    for _ in range(n_steps):
-        bot.apply_wheel_actions(controller.forward(np.array([0, np.pi/2])))
-    return None
-
-def stay(bot, controller, n_steps=5):
-    for _ in range(n_steps):
-        bot.apply_wheel_actions(controller.forward(np.array([0, 0])))
-    return None
-
-def bot_act(bot, controller, action, n_steps=5):
-    if action == 0:
-        stay(bot, controller, n_steps)
-    elif action == 1:
-        go_forward(bot, controller, n_steps)
-    elif action == 2:
-        go_backward(bot, controller, n_steps)
-    elif action == 3:
-        turn_right(bot, controller, n_steps)
-    elif action == 4:
-        turn_left(bot, controller, n_steps)
-    return None
-
-act_dict = {0 : 'stay', 1 : 'forward', 2 : 'backward', 3 : 'right', 4 : 'left'}
 
 # THE WORLD SECTION STARTS HERE
 
@@ -149,7 +82,6 @@ except:
 if result:
     omni.usd.get_context().open_stage(usd_path)
     wr_stage = omni.usd.get_context().get_stage()
-
     # stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
 else:
     carb.log_error(
@@ -178,61 +110,17 @@ wr_timeline = omni.timeline.get_timeline_interface()
 wr_world.initialize_physics()
 print("Physics Initialized!")
 
-# CARTER
-carter_asset_path = assets_root_path + "/Isaac/Robots/Carter/nova_carter_sensors.usd"
-carter_bot = WheeledRobot(
-        prim_path="/World/Nova_Carter",
-        name="Carter",
-        wheel_dof_names=["joint_caster_left", "joint_caster_right", "joint_wheel_left", "joint_wheel_right"],
-        wheel_dof_indices=[3, 4, 5, 6],
-        create_robot=True,
-        usd_path=carter_asset_path,
-        position=np.array([0.4, -0.4,0]),
-    )
-wr_world.scene.add(carter_bot) 
-# carter_bot.enable_gravity()
-# carter_bot.set_default_state(position=np.array([-4, -4, 0]))
-# carter_bot.set_enabled_self_collisions(True)
+wr_bot = RLBot(kit, wr_world, assets_root_path)
+wr_bot_controller = RLBotController()
+wr_bot_act = RLBotAct(wr_bot.rl_bot, wr_bot_controller, n_steps=5)
+print("Bot Created!")
 
-carter = ArticulationView(prim_paths_expr="/World/Nova_Carter", name="Carter")
-carter = wr_world.scene.get_object("Carter")
-print(f"Carter : {carter}")
-print("Carter in the World")
+# for i in range(2000):
+#     kit.update()
+# print("launching pegasus")
 
-# CARTER CAMERA
-carter_camera = Camera(prim_path="/World/Nova_Carter/chassis_link/front_owl/camera", 
-                    name='Carter_Camera',
-                    frequency=30,
-                    resolution=(512,512))
-carter_camera.initialize()
-kit.update()
-carter_camera.initialize()
-print(f"Carter Camera : {carter_camera}")
-wr_world.initialize_physics()
-
-# CARTER LiDAR
-carter_lidar = wr_world.scene.add(
-    LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
-             name="Carter_Lidar"))
-print(f"Carter LiDAR : {carter_lidar}")
-print("performing reset")
-wr_world.reset()
-print("reset done")
-carter_lidar.add_range_data_to_frame()
-carter_lidar.add_point_cloud_data_to_frame()
-carter_lidar.enable_visualization()
-
-# CARTER CONTROLLER
-carter_controller = CarterController()
-print("Controller Created!")
-
-for i in range(2000):
-    kit.update()
-print("launching pegasus")
-
-pg_app = PegasusApp(wr_world, wr_timeline, kit)
-pg_app.run()
-
+# pg_app = PegasusApp(wr_world, wr_timeline, kit)
+# pg_app.run()
 
 i = 0
 reset_needed = False
@@ -247,20 +135,18 @@ while kit.is_running():
             reset_needed = False
         if i >= 0:
             with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
-                f.write(str(carter_lidar.get_current_frame()))
+                f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
                 f.write('\n')
-            if i % 200 == 0:
-                act_val = np.random.randint(0,5,1)
-                # act_val = np.array([1])
-                print(f"Action Value : {act_val} - {act_dict[act_val[0]]}")
-                bot_act(carter, carter_controller, act_val)
+            if i % 150 == 0:
+                rand_val = np.random.uniform(-2,2,1)
+                rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+                print(f"Applied Action Values : {rand_val}")
+                wr_bot_act.move_bot(vals=rand_val)
                 with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(carter_camera.get_current_frame()))
+                    f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
                     f.write('\n')
-                # print(carter_camera.get_current_frame())    
-                imgplot = plt.imshow(carter_camera.get_rgba()[:, :, :3])
+                imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
                 plt.show()
-                # print(carter_camera.get_current_frame()["motion_vectors"])
             # print(carter_lidar.get_current_frame())
             # forward
             # carter.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi/2]))
