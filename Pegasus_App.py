@@ -9,7 +9,7 @@ from pegasus.simulator.logic.people.person_controller import PersonController
 # from pegasus.simulator.logic.backends.mavlink_backend import MavlinkBackend, MavlinkBackendConfig
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 
-import omni.anim.graph.core as ag
+# import omni.anim.graph.core as ag
 
 class CirclePersonController(PersonController):
 
@@ -33,35 +33,39 @@ class GoTo_Controller(PersonController):
     def __init__(self):
         super().__init__()
 
-        self.current_position = None
-        self.next_position = self.current_position
+        self.next_position = None
         self.speed = 1.0
         
     def update(self, dt: float):
 
-        self.current_position = self._person._state.position
-        print(f" Current Position : {self.current_position}")
+        # print(f"Character accessed : {self._person._character_name}")
+        # print(f"Character_Stage_Name accessed : {self._person._stage_prefix}")
+        # It is "/World/Characters/{THE_NAME}"
+
+        # self.current_position = self._person._state.position
+        # print(f" Current Position : {self._person._state.position}")
 
         if self.next_position is None:
             distance_to_target_position = 0.0
         else:
-            distance_to_target_position = np.linalg.norm(self.next_position - self.current_position)
-            print(f"Distance to target position : {distance_to_target_position}")
+            distance_to_target_position = np.linalg.norm(self.next_position - self._person._state.position)
+            # print(f"Current_position in D : ", self._person._state.position)
+            # print(f"Next_position in D : ", self.next_position)
+            # print(f"Distance to target position : {distance_to_target_position}")
 
         if distance_to_target_position > 0.2:
-            print("Walking")
-            print(f"Next position : {self.next_position}")
-            # self._person.update_target_position(self.next_position, self.speed)
-            pass
+            # print("Walking")
+            # print(f"Next position : {self.next_position}")
+            self._person.update_target_position(self.next_position, self.speed)
         elif distance_to_target_position < 0.2:
-            self._person._state.position = self.next_position
+            # self._person._state.position = self.next_position
             self.random_pos = np.random.uniform(-7, 7, 3)
             self.speed = np.random.choice([0.5, 5])
             self.random_pos[-1] = 0.0
             self.next_position = self.random_pos
-            print(f"Next position : {self.next_position}")
+            # print(f"Next position : {self.next_position}")
             self._person.update_target_position(self.next_position, self.speed)
-            print("Updating to Target Position")
+            # print("Updating to Target Position")
 
 # Auxiliary scipy and numpy modules
 from scipy.spatial.transform import Rotation
@@ -115,8 +119,8 @@ class PegasusApp:
         # person_controller = CirclePersonController()
         # p1 = Person("person1", "original_male_adult_construction_05", init_pos=[3.0, 0.0, 0.0], init_yaw=1.0, controller=person_controller)
         
-        for i in range(5):
-            p = Person(f"person{i}", asset_list[i], init_pos=[3.0, i, 0.0], controller=GoTo_Controller())
+        for i in range(10):
+            p = Person(f"person{i}", asset_list[i], init_pos=[3.0, 0.0, 0.0], controller=GoTo_Controller())
             self.person_list.append(p)
 
         # Auxiliar variable for the timeline callback example

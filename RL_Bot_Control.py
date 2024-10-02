@@ -1,6 +1,5 @@
 from omni.isaac.core.controllers import BaseController
 from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.wheeled_robots.robots import WheeledRobot
 
 import numpy as np
 

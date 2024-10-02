@@ -3,14 +3,14 @@ from omni.isaac.wheeled_robots.robots import WheeledRobot
 from omni.isaac.core.articulations import ArticulationView
 from omni.isaac.sensor import Camera
 from omni.isaac.sensor import LidarRtx
-
 # from RL_Bot_Control import RLBotController
 
 import numpy as np
+import random
 
 # Nova Carter In our Case
 class RLBot():
-    def __init__(self, simulation_app, world, assets_root_path):
+    def __init__(self, world, simulation_app, assets_root_path):
 
         self.kit = simulation_app
         self.world = world
@@ -26,6 +26,7 @@ class RLBot():
             usd_path=self.rl_bot_asset_path,
             position=np.array([0.4, -0.4,0]))
         self.world.scene.add(self.rl_bot_carter) 
+
         self.rl_bot = ArticulationView(prim_paths_expr="/World/Nova_Carter", name="RL_Bot")
         self.rl_bot = self.world.scene.get_object("RL_Bot")
         print(f"RL_Bot : {self.rl_bot}")
@@ -53,9 +54,19 @@ class RLBot():
         self.rl_bot_lidar.add_range_data_to_frame()
         self.rl_bot_lidar.add_point_cloud_data_to_frame()
         self.rl_bot_lidar.enable_visualization()
-
-        # CARTER CONTROLLER
-        # self.rl_bot_controller = RLBotController()
-        # print("Controller Created!")
-
         print("RL Bot Initialized!")
+        # Bot Parameters
+        # self.rl_bot.current_state = self.rl_bot.get_world_pose()
+
+    def bot_reset(self):
+        valid_pos_x = random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200)))))))
+        valid_pos_y = random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100)))))
+        new_pos = np.array([valid_pos_x, valid_pos_y, 0.0])
+
+        self.rl_bot.set_default_state(position=new_pos, orientation=np.array([1, 0, 0, 0]))
+        print("Bot is reset!")
+    
+    # def bot_current_pose(self):
+    #     return self.rl_bot.get_world_pose()
+
+    

@@ -1,4 +1,3 @@
-
 import argparse
 import sys
 
@@ -38,6 +37,7 @@ import omni.replicator.core as rep
 import omni.timeline
 from omni.isaac.core.utils.extensions import disable_extension, enable_extension
 import time
+import json
 
 EXTENSIONS_PEOPLE = [
     'omni.anim.people', 
@@ -60,11 +60,32 @@ for ext_people in EXTENSIONS_PEOPLE:
 # Update the simulation app with the new extensions
 kit.update()
 
-from RL_Bot import RLBot
+# from RL_Bot import RLBot
+from RLBL import RLBot
 from RL_Bot_Control import RLBotController, RLBotAct
-from Pegasus_App import PegasusApp
+from Mod_Pegasus_App import PegasusApp
+# from Pegasus_App import PegasusApp
 
 # THE WORLD SECTION STARTS HERE
+
+def convert_to_serializable(data):
+    """
+    Convert numpy ndarrays to lists for JSON serialization.
+    
+    Args:
+        data: The data to convert (can be a dict, list, or ndarray).
+        
+    Returns:
+        The converted data.
+    """
+    if isinstance(data, dict):
+        return {key: convert_to_serializable(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [convert_to_serializable(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()  # Convert ndarray to list
+    else:
+        return data  # Return as is for other types
 
 assets_root_path = get_assets_root_path()
 if assets_root_path is None:
@@ -110,7 +131,8 @@ wr_timeline = omni.timeline.get_timeline_interface()
 wr_world.initialize_physics()
 print("Physics Initialized!")
 
-wr_bot = RLBot(kit, wr_world, assets_root_path)
+wr_bot = RLBot(wr_world, kit, assets_root_path)
+wr_bot.bot_reset()
 wr_bot_controller = RLBotController()
 wr_bot_act = RLBotAct(wr_bot.rl_bot, wr_bot_controller, n_steps=5)
 print("Bot Created!")
@@ -119,60 +141,65 @@ print("Bot Created!")
 #     kit.update()
 # print("launching pegasus")
 
-# pg_app = PegasusApp(wr_world, wr_timeline, kit)
+pg_app = PegasusApp(wr_world, wr_timeline, kit)
 # pg_app.run()
 
-i = 0
+i = 1
 reset_needed = False
 while kit.is_running():
+    wr_timeline.play()
     wr_world.step(render=True)
     if wr_world.is_stopped() and not reset_needed:
         reset_needed = True
     if wr_world.is_playing():
-        if reset_needed:
-            wr_world.reset()
-            # bot_controller.reset()
-            reset_needed = False
-        if i >= 0:
-            with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
-                f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
-                f.write('\n')
-            if i % 150 == 0:
-                rand_val = np.random.uniform(-2,2,1)
-                rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
-                print(f"Applied Action Values : {rand_val}")
-                wr_bot_act.move_bot(vals=rand_val)
-                with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
-                    f.write('\n')
-                imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
+        # if reset_needed:
+        #     wr_world.reset()
+        #     # bot_controller.reset()
+        #     reset_needed = False
+        if i:
+            # print(wr_bot.rl_bot_lidar.get_current_frame())
+            # print(type(wr_bot.rl_bot_lidar.get_current_frame()))
+            pos,_ = wr_bot.rl_bot.get_world_pose()
+            l_data = wr_bot.lsi.get_point_cloud_data("/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E")
+            print(f"Lidar Data: {l_data}")
+            # with open(f'/home/rah_m/Isaac_World_Files/lidar_data_{pos}_{i}.json', 'w') as f:
+            #     json.dump(convert_to_serializable(wr_bot.rl_bot_lidar.get_current_frame()), f)
+                # f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
+                # f.write('\n')
+            if i:
+                # rand_val = np.random.uniform(-2,2,1)
+                # rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+                # print(f"Applied Action Values : {rand_val}")
+                # wr_bot_act.move_bot(vals=rand_val)
+                # with open(f'/home/rah_m/Isaac_World_Files/camera_data_{i}.json', 'w') as f:
+                #     json.dump(convert_to_serializable(wr_bot.rl_bot_camera.get_current_frame()), f)
+                #     f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
+                #     f.write('\n')
+                # imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
                 plt.show()
-            # print(carter_lidar.get_current_frame())
-            # forward
-            # carter.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi/2]))
         else:
-            break
-        # elif i >= 1000 and i < 1265:
-        #     # rotate
-        #     carter.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi / 12]))
-        # elif i >= 1265 and i < 2000:
-        #     # forward
-        #     carter.apply_wheel_actions(bot_controller.forward(command=[0.05, 0]))
-        # elif i == 2000:
-        #     i = 0
+            # carb.log_warn("PegasusApp Simulation App is closing.")
+            print("Simulation Done!")
+            # wr_timeline.stop()
+            # wr_world.stop()
+            kit.update()
+            wr_world.reset(True)
+            kit.update()
+            # kit.close()
+            # break
         i += 1
-wr_world.stop()
+# wr_world.stop()
 print('loop is done!')
 
 # omni.timeline.get_timeline_interface().play()
 # Run in test mode, exit after a fixed number of steps
-if args.test is True:
-    for i in range(10):
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
-else:
-    while kit.is_running():
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
+# if args.test is True:
+#     for i in range(10):
+#         # Run in realtime mode, we don't specify the step size
+#         kit.update()
+# else:
+#     while kit.is_running():
+#         # Run in realtime mode, we don't specify the step size
+#         kit.update()
 
 # omni.timeline.get_timeline_interface().stop()

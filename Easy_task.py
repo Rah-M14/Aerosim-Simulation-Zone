@@ -1,4 +1,3 @@
-
 import argparse
 import sys
 
@@ -25,119 +24,67 @@ import omni
 import matplotlib.pyplot as plt
 import numpy as np
 from pxr import Usd, Vt, Gf
-import stable_baselines3 as sb3
 
 import omni.kit.viewport.utility
 from omni.isaac.core import World, SimulationContext
-from omni.isaac.core.utils import stage
-from omni.isaac.core.scenes import Scene
-from omni.isaac.core.prims import XFormPrimView
-from omni.isaac.wheeled_robots.robots import WheeledRobot
-from omni.isaac.wheeled_robots.controllers import DifferentialController, WheelBasePoseController
-from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.core.controllers import BaseController
-from omni.isaac.sensor import Camera
-from omni.isaac.sensor import LidarRtx
-from omni.isaac.range_sensor._range_sensor import acquire_lidar_sensor_interface
+# from omni.isaac.core.utils import stage
+# from omni.isaac.core.scenes import Scene
+# from omni.isaac.core.prims import XFormPrimView
 from omni.isaac.nucleus import get_assets_root_path, is_file
-from omni.isaac.core.utils.extensions import enable_extension
 
 import omni.isaac.core.utils.numpy.rotations as rot_utils
 import omni.replicator.core as rep
+import omni.timeline
+from omni.isaac.core.utils.extensions import disable_extension, enable_extension
+import time
+import json
 
-print("SB3 imported!")
+EXTENSIONS_PEOPLE = [
+    'omni.anim.people', 
+    'omni.anim.navigation.bundle', 
+    'omni.anim.timeline',
+    'omni.anim.graph.bundle', 
+    'omni.anim.graph.core', 
+    'omni.anim.graph.ui',
+    'omni.anim.retarget.bundle', 
+    'omni.anim.retarget.core',
+    'omni.anim.retarget.ui', 
+    'omni.kit.scripting',
+    'omni.graph.io',
+    'omni.anim.curve.core',
+]
 
+for ext_people in EXTENSIONS_PEOPLE:
+    enable_extension(ext_people)
 
+# Update the simulation app with the new extensions
+kit.update()
 
-
-
-
-
-
-# CUSTOM DEFINITION OF CLASSES & FUNCTIONS
-
-# class OpenController(BaseController):
-#     def __init__(self):
-#         super().__init__(name="open_controller")
-#         # An open loop controller that uses a unicycle model
-#         self._wheel_radius = 0.03
-#         self._wheel_base = 0.1125
-#         return
-
-#     def forward(self, command):
-#         # command will have two elements, first element is the forward velocity
-#         # second element is the angular velocity (yaw only).
-#         joint_velocities = [0.0, 0.0]
-#         joint_velocities[0] = ((2 * command[0]) - (command[1] * self._wheel_base)) / (2 * self._wheel_radius)
-#         joint_velocities[1] = ((2 * command[0]) + (command[1] * self._wheel_base)) / (2 * self._wheel_radius)
-#         # A controller has to return an ArticulationAction
-#         return ArticulationAction(joint_velocities=np.array(joint_velocities))
-
-# def send_robot_actions(bot, controller, v, w):
-#     position, orientation = bot.get_world_pose()
-#     print(f"Bot's Position : {position}, Bot's Orientation : {orientation} ")
-#     #apply the actions calculated by the controller
-#     bot.apply_action(controller.forward(command=[v, w]))
-#     return
-
-#  # CONTROLLER CONTROL
-# def go_forward(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([1, 0])))
-#     return None
-
-# def go_backward(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([-1, 0])))
-#     return None
-
-# def turn_right(bot, controller, n_steps=210):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, 0.5])))
-#     return None
-
-# def turn_left(bot, controller, n_steps=210):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, -0.5])))
-#     return None
-
-# def stay(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, 0])))
-#     return None
-
-# def bot_act(bot, controller, action, n_steps=50):
-#     if action == 0:
-#         stay(bot, controller, n_steps)
-#     elif action == 1:
-#         go_forward(bot, controller, n_steps)
-#     elif action == 2:
-#         go_backward(bot, controller, n_steps)
-#     elif action == 3:
-#         turn_right(bot, controller, n_steps=210)
-#     elif action == 4:
-#         turn_left(bot, controller, n_steps=210)
-    # return None
-
-def bot_act(bot, controller, action):
-    pos, ori = bot.get_world_pose()
-    print(f"Bot's Position : {pos}, Bot's Orientation : {ori} ")
-    if action == 1:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos+np.array([0.0, 0.5, 0])))
-    elif action == 2:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos-np.array([0.0, 0.5, 0])))
-    elif action == 3:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos+np.array([0.5, 0.0, 0])))
-    elif action == 4:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos-np.array([0.5, 0.0, 0])))
-    elif action == 0:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos))
-    return None
-
-act_dict = {0 : 'stay', 1 : 'forward', 2 : 'backward', 3 : 'right', 4 : 'left'}
+from RL_Bot import RLBot
+from RL_Bot_Control import RLBotController, RLBotAct
+from Mod_Pegasus_App import PegasusApp
+# from Pegasus_App import PegasusApp
 
 # THE WORLD SECTION STARTS HERE
+
+def convert_to_serializable(data):
+    """
+    Convert numpy ndarrays to lists for JSON serialization.
+    
+    Args:
+        data: The data to convert (can be a dict, list, or ndarray).
+        
+    Returns:
+        The converted data.
+    """
+    if isinstance(data, dict):
+        return {key: convert_to_serializable(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [convert_to_serializable(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()  # Convert ndarray to list
+    else:
+        return data  # Return as is for other types
 
 assets_root_path = get_assets_root_path()
 if assets_root_path is None:
@@ -154,15 +101,15 @@ except:
 
 if result:
     omni.usd.get_context().open_stage(usd_path)
-    # wr_stage = omni.usd.get_context().get_stage()
-
-    stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
+    wr_stage = omni.usd.get_context().get_stage()
+    # stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
 else:
     carb.log_error(
         f"the usd path {usd_path} could not be opened, please make sure that {args.usd_path} is a valid usd file in {assets_root_path}"
     )
     kit.close()
     sys.exit()
+
 # Wait two frames so that stage starts loading
 kit.update()
 kit.update()
@@ -174,9 +121,6 @@ while is_stage_loading():
     kit.update()
 print("Loading Complete")
 
-# scene = Scene()
-# world.scene.add(XFormPrimView(prim_paths_expr="/World/Waiting_Room_Base"))
-
 wr_world = World()
 print("Waiting Room in the World!")
 
@@ -184,231 +128,73 @@ enable_extension("omni.isaac.debug_draw")
 lidar_config = 'RPLIDAR_S2E'
 wr_timeline = omni.timeline.get_timeline_interface() 
 wr_world.initialize_physics()
+print("Physics Initialized!")
 
-# # JETBOT
-# jetbot_asset_path = assets_root_path + "/Isaac/Robots/Jetbot/jetbot.usd"
-# wr_world.scene.add(
-#     WheeledRobot(
-#         prim_path="/World/Jetbot",
-#         name="Jetbot",
-#         wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
-#         create_robot=True,
-#         usd_path=jetbot_asset_path,
-#         position=np.array([0.4, -0.4,0]),
-#     )
-# )
-# jetbot = ArticulationView(prim_paths_expr="/World/Jetbot" , name="Jetbot")
-# print("Jetbot in the World")
-# jetbot = wr_world.scene.get_object("Jetbot")
-# jetbot.set_local_scale(np.array([2.5, 2.5, 2.5]))
+wr_bot = RLBot(wr_world, kit, assets_root_path)
+wr_bot.bot_reset()
+wr_bot_controller = RLBotController()
+wr_bot_act = RLBotAct(wr_bot.rl_bot, wr_bot_controller, n_steps=5)
+print("Bot Created!")
 
-# # JETBOT CAMERA
-# jet_camera = Camera(prim_path='/World/Jetbot/chassis/rgb_camera/jetbot_camera', 
-#                     name='Jetbot_Camera',
-#                     frequency=30,
-#                     resolution=(512,512),
-#                     )
-# jet_camera.initialize()
-# kit.update()
-# jet_camera.initialize()
-# wr_world.initialize_physics()
+# for i in range(2000):
+#     kit.update()
+# print("launching pegasus")
 
-# # JETBOT LiDAR
-# _, sensor = omni.kit.commands.execute(
-#     "IsaacSensorCreateRtxLidar",
-#     path="/sensor",
-#     parent=None,
-#     config=lidar_config,
-#     translation=(0, 0, 1.0),
-#     orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),  # Gf.Quatd is w,i,j,k
-# )
-# hydra_texture = rep.create.render_product(sensor.GetPath(), [1, 1], name="Isaac")
+pg_app = PegasusApp(wr_world, wr_timeline, kit)
+# pg_app.run()
 
-# simulation_context = SimulationContext(physics_dt=1.0 / 60.0, rendering_dt=1.0 / 60.0, stage_units_in_meters=1.0)
-# kit.update()
-
-# rp = rep.create.render_product(jet_camera, (512,512))
-# jet_camera.add_bounding_box_2d_tight_to_frame()
-# bbox_2d_tight = rep.AnnotatorRegistry.get_annotator("bounding_box_2d_tight")
-# bbox_2d_tight.attach(rp)
-
-# print('Bot Created!')
-
-# # my_controller = OpenController()
-# bot_controller=DifferentialController(name="simple_control", wheel_radius=0.035, wheel_base=0.1125)
-# throttle = 1.0
-# steering = 0.5
-# print("Controller Created!")
-
-# val = 200
-# turn = 80
-# tmp = np.array([np.full(shape=val, fill_value=1), np.full(shape=val, fill_value=2), np.full(shape=val, fill_value=0), 
-#                np.full(shape=val, fill_value=4), np.full(shape=val, fill_value=1), np.full(shape=val, fill_value=3), np.full(shape=val, fill_value=1)])
-
-# i = 0
-# jet_camera.add_motion_vectors_to_frame()
-
-# while kit.is_running():
-#     wr_world.step(render=True)
-#     if i % 100 == 0:
-#         act_val = np.random.randint(0,5,1)
-#         bot_act(jetbot, bot_controller, act_val)
-#         print(jet_camera.get_current_frame())    
-#         imgplot = plt.imshow(jet_camera.get_rgba()[:, :, :3])
-#         plt.show()
-#         print(jet_camera.get_current_frame()["motion_vectors"])
-#     if wr_world.is_playing():
-#         if wr_world.current_time_step_index == 0:
-#             wr_world.reset()
-#     i += 1
-
-# LEATHERBACK
-leatherback_asset_path = assets_root_path + "/Isaac/Robots/Leatherback/leatherback.usd"
-# wr_world.scene.add(
-#     WheeledRobot(
-#         prim_path="/World/Leatherback",
-#         name="Leatherback",
-#         wheel_dof_names=["Wheel__Upright__Rear_Right", "Wheel__Upright__Rear_Left", "Wheel__Knuckle__Front_Right", "Wheel__Knuckle__Front_Left"],
-#         wheel_dof_indices=[13, 16, 24, 25],
-#         create_robot=True,
-#         usd_path=leatherback_asset_path,
-#         position=np.array([0.4, -0.4, 0]),
-#     )
-# )
-
-wr_world.scene.add(
-    WheeledRobot(
-        prim_path="/World/Leatherback",
-        name="Leatherback",
-        wheel_dof_names=["Wheel__Knuckle__Front_Left", "Wheel__Knuckle__Front_Right"],
-        wheel_dof_indices=[24, 25],
-        create_robot=True,
-        usd_path=leatherback_asset_path,
-        position=np.array([0.4, -0.4,0]),
-    )
-)
-leatherback = wr_world.scene.get_object("Leatherback")
-leatherback = ArticulationView(prim_paths_expr="/World/Leatherback" , name="Leatherback")
-print("Leatherback in the World")
-
-# LEATHERBACK CAMERA
-lea_camera = Camera(prim_path="/World/Leatherback/Rigid_Bodies/Chassis/Camera_Right", 
-                    name='Leatherback_Camera',
-                    frequency=30,
-                    resolution=(512,512),
-                    )
-lea_camera.initialize()
-kit.update()
-lea_camera.initialize()
-wr_world.initialize_physics()
-
-# LEATHERBACK LiDAR
-
-# LIDAR RTX
-lea_lidar = wr_world.scene.add(
-    LidarRtx(prim_path="/World/Leatherback/Rigid_Bodies/Chassis/Lidar", 
-             name="Leatherback_Lidar"))
-print("performing reset")
-wr_world.reset()
-print("reset done")
-lea_lidar.add_range_data_to_frame()
-lea_lidar.add_point_cloud_data_to_frame()
-lea_lidar.enable_visualization()
-
-# my_controller = OpenController()
-# bot_controller=DifferentialController(name="simple_control", wheel_radius=0.035, wheel_base=0.1125)
-lea_controller = WheelBasePoseController(name='lea_controller', 
-                                         open_loop_wheel_controller=DifferentialController(name='lea_diff_controller', 
-                                                                                           wheel_radius=0.0995, wheel_base=0.21),
-                                        is_holonomic=False)
-print("Controller Created!")
-print(f"Total DOF : {leatherback.num_dof}")
-print(f"Bot's DOF Names : {leatherback.dof_names}")
-print(f"Bot's DOF  Properties : {leatherback.dof_properties}")
-print(f"Bot's Names Dtype {leatherback.dof_properties.dtype.names}")
-
-i = 0
+i = 1
 reset_needed = False
 while kit.is_running():
+    wr_timeline.play()
     wr_world.step(render=True)
     if wr_world.is_stopped() and not reset_needed:
         reset_needed = True
     if wr_world.is_playing():
-        if reset_needed:
-            wr_world.reset()
-            # bot_controller.reset()
-            reset_needed = False
-        if i >= 0:
-            with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
-                f.write(str(lea_lidar.get_current_frame()))
-                f.write('\n')
-            if i == 100:
-                act_val = np.random.randint(0,5,1)
-                act_val = np.array([2])
-                print(f"Action Value : {act_val} - {act_dict[act_val[0]]}")
-                bot_act(leatherback, lea_controller, act_val)
-                with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(lea_camera.get_current_frame()))
+        # if reset_needed:
+        #     wr_world.reset()
+        #     # bot_controller.reset()
+        #     reset_needed = False
+        if i % 100 != 0:
+            # print(wr_bot.rl_bot_lidar.get_current_frame())
+            # print(type(wr_bot.rl_bot_lidar.get_current_frame()))
+            with open(f'/home/rah_m/Isaac_World_Files/lidar_data_{i}.json', 'w') as f:
+                json.dump(convert_to_serializable(wr_bot.rl_bot_lidar.get_current_frame()), f)
+                # f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
+                # f.write('\n')
+            if i % 150 == 0:
+                # rand_val = np.random.uniform(-2,2,1)
+                # rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+                # print(f"Applied Action Values : {rand_val}")
+                # wr_bot_act.move_bot(vals=rand_val)
+                with open('/home/rah_m/Isaac_World_Files/camera_data.json', 'a+') as f:
+                    f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
                     f.write('\n')
-                # print(lea_camera.get_current_frame())    
-                imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
+                imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
                 plt.show()
-            if i == 1000:
-                act_val = np.random.randint(0,5,1)
-                act_val = np.array([1])
-                print(f"Action Value : {act_val} - {act_dict[act_val[0]]}")
-                bot_act(leatherback, act_val)
-                with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(lea_camera.get_current_frame()))
-                    f.write('\n')
-                # print(lea_camera.get_current_frame())    
-                imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
-                plt.show()
-                    
-                # print(lea_camera.get_current_frame()["motion_vectors"])
-            # print(lea_lidar.get_current_frame())
-            # forward
-            # leatherback.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi/2]))
         else:
-            break
-        # elif i >= 1000 and i < 1265:
-        #     # rotate
-        #     leatherback.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi / 12]))
-        # elif i >= 1265 and i < 2000:
-        #     # forward
-        #     leatherback.apply_wheel_actions(bot_controller.forward(command=[0.05, 0]))
-        # elif i == 2000:
-        #     i = 0
+            # carb.log_warn("PegasusApp Simulation App is closing.")
+            print("Simulation Done!")
+            # wr_timeline.stop()
+            # wr_world.stop()
+            kit.update()
+            wr_world.reset(True)
+            kit.update()
+            # kit.close()
+            # break
         i += 1
-wr_world.stop()
-
-# i = 0
-# while kit.is_running():
-#     wr_world.step(render=True)
-#     if i % 100 == 0:
-#         act_val = np.random.randint(0,5,1)
-#         bot_act(leatherback, bot_controller, act_val)
-#         print(lea_camera.get_current_frame())    
-#         imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
-#         plt.show()
-#         print(lea_camera.get_current_frame()["motion_vectors"])
-#     if wr_world.is_playing():
-#         if wr_world.current_time_step_index == 0:
-#             wr_world.reset()
-#     i += 1
-
+# wr_world.stop()
 print('loop is done!')
 
 # omni.timeline.get_timeline_interface().play()
 # Run in test mode, exit after a fixed number of steps
-if args.test is True:
-    for i in range(10):
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
-else:
-    while kit.is_running():
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
+# if args.test is True:
+#     for i in range(10):
+#         # Run in realtime mode, we don't specify the step size
+#         kit.update()
+# else:
+#     while kit.is_running():
+#         # Run in realtime mode, we don't specify the step size
+#         kit.update()
 
 # omni.timeline.get_timeline_interface().stop()
-

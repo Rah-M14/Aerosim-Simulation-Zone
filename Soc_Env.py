@@ -1,462 +1,454 @@
-
 import argparse
 import sys
-
-from isaacsim import SimulationApp
-
-# This sample loads a usd stage and starts simulation
-CONFIG = {"width": 1280, "height": 720, "sync_loads": True, "headless": False, "renderer": "RayTracedLighting"}
-
-# Set up command line arguments
-parser = argparse.ArgumentParser("Usd Load sample")
-parser.add_argument(
-    "--usd_path", type=str, help="Path to usd file, should be relative to your default assets folder", required=True
-)
-parser.add_argument("--headless", default=False, action="store_true", help="Run stage headless")
-parser.add_argument("--test", default=False, action="store_true", help="Run in test mode")
-
-args, unknown = parser.parse_known_args()
-# Start the omniverse application
-CONFIG["headless"] = args.headless
-kit = SimulationApp(launch_config=CONFIG)
-
-import carb
-import omni
-import matplotlib.pyplot as plt
-from gymnasium import spaces
+import gym
+from gym import spaces
 import numpy as np
-import torch
+import matplotlib.pyplot as plt
 import math
-from pxr import Usd, Vt, Gf
+import asyncio
+import threading
+import carb
 
-
-from omni.isaac.core import World, SimulationContext
-from omni.isaac.core.scenes import Scene
-from omni.isaac.core.prims import XFormPrimView
-from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.core.controllers import BaseController
-
-from omni.isaac.core.utils import stage
-from omni.isaac.core.utils.extensions import enable_extension
-from omni.isaac.core.utils.nucleus import get_assets_root_path
-import omni.isaac.core.utils.numpy.rotations as rot_utils
-from omni.isaac.core.utils.stage import add_reference_to_stage
-from omni.isaac.core.utils.prims import create_prim
-from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.core.utils.viewports import set_camera_view
-
-from omni.isaac.core.tasks.base_task import BaseTask
-
-import omni.kit.viewport.utility
-from omni.isaac.wheeled_robots.robots import WheeledRobot
-from omni.isaac.wheeled_robots.controllers import DifferentialController, WheelBasePoseController
-from omni.isaac.sensor import Camera
-from omni.isaac.sensor import LidarRtx
-# from omni.isaac.range_sensor import _range_sensor 
-from omni.isaac.range_sensor._range_sensor import acquire_lidar_sensor_interface
-from omni.isaac.nucleus import get_assets_root_path, is_file
-
-import omni.replicator.core as rep
-
-class SocEnv(BaseTask):
-    def __init__(self, name: str, env: VecEnvBase, offset:np.ndarray = None) -> None:
-        self._bot_position = [-4,-4,0]
-        self._reset_dist = 0
-        self._max_push_effort = 300.0
-
-        self._num_observations = 4
-        self._num_actions = 1
-        self._device = "CUDA"
-        self.num_envs = 1
-
-        self.obs = torch.zeros((self.num_envs, self._num_observations))
-        self.resets = torch.zeros((self.num_envs, 1))
-
-        self.action_space = spaces.Box(np.ones(self._num_actions, dtype=np.float32) * -1.0, 
-                                       np.ones(self._num_actions, dtype=np.float32) * 1.0)
-        self.observation_space = spaces.Box(np.ones(self._num_observations, dtype=np.float32) * -np.Inf,
-                                            np.ones(self._num_observations, dtype=np.float32) * np.Inf)
-
-        pass
+class SocEnv(gym.Env):
+    metadata = {"render.modes": ["human"]}
     
-    def set_up_scene(self, scene: Scene, replicate_phyiscs: True, collision_filter_global_paths=[], filter_collisions=True):
-        pass
+    def __init__(
+        self,
+        skip_frame=10,
+        physics_dt=1.0 / 60.0,
+        rendering_dt=1.0 / 60.0,
+        max_episode_length=10000000,
+        seed=0,
+        headless=True,
+    ) -> None:
+        
+        from isaacsim import SimulationApp
 
+        CONFIG = {"width": 1280, "height": 720, "sync_loads": True, "headless": False, "renderer": "RayTracedLighting"}
 
+        parser = argparse.ArgumentParser("Usd Load sample")
+        parser.add_argument(
+            "--usd_path", type=str, help="Path to usd file, relative to our default assets folder", required=True
+        )
+        parser.add_argument("--headless", default=False, action="store_true", help="Run stage headless")
+        parser.add_argument("--test", default=False, action="store_true", help="Run in test mode")
 
+        args, unknown = parser.parse_known_args()
+        CONFIG["headless"] = args.headless
+        self.kit = SimulationApp(launch_config=CONFIG)
+        self._skip_frame = skip_frame
+        self._dt = physics_dt * self._skip_frame
+        self._max_episode_length = max_episode_length
+        self._steps_after_reset = int(rendering_dt / physics_dt)
+        
+        import omni
+        import matplotlib.pyplot as plt
+        # from gymnasium import spaces
+        import torch
+        import random
+        import asyncio
+        import threading
 
+        from pxr import Usd, Vt, Gf
 
+        import asyncio
+        from stable_baselines3 import PPO
 
+        from omni.isaac.core import World, SimulationContext
+        from omni.isaac.core.scenes import Scene
 
+        # from omni.isaac.core.utils import stage
+        from omni.isaac.core.utils.extensions import enable_extension
+        from omni.isaac.core.utils.nucleus import get_assets_root_path
+        import omni.isaac.core.utils.numpy.rotations as rot_utils
+        # from omni.isaac.core.utils.stage import add_reference_to_stage
+        # from omni.isaac.core.utils.prims import create_prim
+        # from omni.isaac.core.utils.viewports import set_camera_view
 
+        from omni.isaac.core.utils.stage import is_stage_loading
+        # import omni.anim.navigation.core as nav
+        import omni.usd
 
+        from omni.isaac.core.tasks.base_task import BaseTask
 
+        import omni.kit.viewport.utility
+        from omni.isaac.nucleus import get_assets_root_path, is_file
+        # import omni.replicator.core as rep
 
+        EXTENSIONS_PEOPLE = [
+            'omni.anim.people', 
+            'omni.anim.navigation.bundle',
+            'omni.anim.navigation.core',
+            'omni.anim.timeline',
+            'omni.anim.graph.bundle', 
+            'omni.anim.graph.core', 
+            'omni.anim.graph.ui',
+            'omni.anim.retarget.bundle', 
+            'omni.anim.retarget.core',
+            'omni.anim.retarget.ui', 
+            'omni.kit.scripting',
+            'omni.graph.io',
+            'omni.anim.curve.core',
+        ]
 
+        for ext_people in EXTENSIONS_PEOPLE:
+            enable_extension(ext_people)
 
+        # import omni.anim.navigation.core as nav
+        self.kit.update()
 
+        from RL_Bot_Control import RLBotController, RLBotAct
+        # from RL_Bot import RLBot
+        from RLBL import RLBot
+        # from Pegasus_App import PegasusApp
+        from Mod_Pegasus_App import PegasusApp
 
+        self.assets_root_path = get_assets_root_path()
+        if self.assets_root_path is None:
+            carb.log_error("Could not find Isaac Sim assets folder")
+            self.kit.close()
+            sys.exit()
+        usd_path = self.assets_root_path + args.usd_path
 
+        try:
+            result = is_file(usd_path)
+        except:
+            result = False
 
-
-
-
-
-
-# CUSTOM DEFINITION OF CLASSES & FUNCTIONS
-
-# class OpenController(BaseController):
-#     def __init__(self):
-#         super().__init__(name="open_controller")
-#         # An open loop controller that uses a unicycle model
-#         self._wheel_radius = 0.03
-#         self._wheel_base = 0.1125
-#         return
-
-#     def forward(self, command):
-#         # command will have two elements, first element is the forward velocity
-#         # second element is the angular velocity (yaw only).
-#         joint_velocities = [0.0, 0.0]
-#         joint_velocities[0] = ((2 * command[0]) - (command[1] * self._wheel_base)) / (2 * self._wheel_radius)
-#         joint_velocities[1] = ((2 * command[0]) + (command[1] * self._wheel_base)) / (2 * self._wheel_radius)
-#         # A controller has to return an ArticulationAction
-#         return ArticulationAction(joint_velocities=np.array(joint_velocities))
-
-# def send_robot_actions(bot, controller, v, w):
-#     position, orientation = bot.get_world_pose()
-#     print(f"Bot's Position : {position}, Bot's Orientation : {orientation} ")
-#     #apply the actions calculated by the controller
-#     bot.apply_action(controller.forward(command=[v, w]))
-#     return
-
-#  # CONTROLLER CONTROL
-# def go_forward(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([1, 0])))
-#     return None
-
-# def go_backward(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([-1, 0])))
-#     return None
-
-# def turn_right(bot, controller, n_steps=210):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, 0.5])))
-#     return None
-
-# def turn_left(bot, controller, n_steps=210):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, -0.5])))
-#     return None
-
-# def stay(bot, controller, n_steps=50):
-#     for _ in range(n_steps):
-#         bot.apply_wheel_actions(controller.forward(np.array([0, 0])))
-#     return None
-
-# def bot_act(bot, controller, action, n_steps=50):
-#     if action == 0:
-#         stay(bot, controller, n_steps)
-#     elif action == 1:
-#         go_forward(bot, controller, n_steps)
-#     elif action == 2:
-#         go_backward(bot, controller, n_steps)
-#     elif action == 3:
-#         turn_right(bot, controller, n_steps=210)
-#     elif action == 4:
-#         turn_left(bot, controller, n_steps=210)
-    # return None
-
-def bot_act(bot, controller, action):
-    pos, ori = bot.get_world_pose()
-    print(f"Bot's Position : {pos}, Bot's Orientation : {ori} ")
-    if action == 1:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos+np.array([0.0, 0.5, 0])))
-    elif action == 2:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos-np.array([0.0, 0.5, 0])))
-    elif action == 3:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos+np.array([0.5, 0.0, 0])))
-    elif action == 4:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos-np.array([0.5, 0.0, 0])))
-    elif action == 0:
-        bot.apply_action(controller.forward(start_position=pos, start_orientation=ori, goal_position=pos))
-    return None
-
-act_dict = {0 : 'stay', 1 : 'forward', 2 : 'backward', 3 : 'right', 4 : 'left'}
-
-# THE WORLD SECTION STARTS HERE
-
-assets_root_path = get_assets_root_path()
-if assets_root_path is None:
-    carb.log_error("Could not find Isaac Sim assets folder")
-    kit.close()
-    sys.exit()
-usd_path = assets_root_path + args.usd_path
-
-# make sure the file exists before we try to open it
-try:
-    result = is_file(usd_path)
-except:
-    result = False
-
-if result:
-    omni.usd.get_context().open_stage(usd_path)
-    # wr_stage = omni.usd.get_context().get_stage()
-
-    stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
-else:
-    carb.log_error(
-        f"the usd path {usd_path} could not be opened, please make sure that {args.usd_path} is a valid usd file in {assets_root_path}"
-    )
-    kit.close()
-    sys.exit()
-# Wait two frames so that stage starts loading
-kit.update()
-kit.update()
-
-print("Loading stage...")
-from omni.isaac.core.utils.stage import is_stage_loading
-
-while is_stage_loading():
-    kit.update()
-print("Loading Complete")
-
-# scene = Scene()
-# world.scene.add(XFormPrimView(prim_paths_expr="/World/Waiting_Room_Base"))
-
-wr_world = World()
-print("Waiting Room in the World!")
-
-enable_extension("omni.isaac.debug_draw")
-lidar_config = 'RPLIDAR_S2E'
-wr_timeline = omni.timeline.get_timeline_interface() 
-wr_world.initialize_physics()
-
-# # JETBOT
-# jetbot_asset_path = assets_root_path + "/Isaac/Robots/Jetbot/jetbot.usd"
-# wr_world.scene.add(
-#     WheeledRobot(
-#         prim_path="/World/Jetbot",
-#         name="Jetbot",
-#         wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
-#         create_robot=True,
-#         usd_path=jetbot_asset_path,
-#         position=np.array([0.4, -0.4,0]),
-#     )
-# )
-# jetbot = ArticulationView(prim_paths_expr="/World/Jetbot" , name="Jetbot")
-# print("Jetbot in the World")
-# jetbot = wr_world.scene.get_object("Jetbot")
-# jetbot.set_local_scale(np.array([2.5, 2.5, 2.5]))
-
-# # JETBOT CAMERA
-# jet_camera = Camera(prim_path='/World/Jetbot/chassis/rgb_camera/jetbot_camera', 
-#                     name='Jetbot_Camera',
-#                     frequency=30,
-#                     resolution=(512,512),
-#                     )
-# jet_camera.initialize()
-# kit.update()
-# jet_camera.initialize()
-# wr_world.initialize_physics()
-
-# # JETBOT LiDAR
-# _, sensor = omni.kit.commands.execute(
-#     "IsaacSensorCreateRtxLidar",
-#     path="/sensor",
-#     parent=None,
-#     config=lidar_config,
-#     translation=(0, 0, 1.0),
-#     orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),  # Gf.Quatd is w,i,j,k
-# )
-# hydra_texture = rep.create.render_product(sensor.GetPath(), [1, 1], name="Isaac")
-
-# simulation_context = SimulationContext(physics_dt=1.0 / 60.0, rendering_dt=1.0 / 60.0, stage_units_in_meters=1.0)
-# kit.update()
-
-# rp = rep.create.render_product(jet_camera, (512,512))
-# jet_camera.add_bounding_box_2d_tight_to_frame()
-# bbox_2d_tight = rep.AnnotatorRegistry.get_annotator("bounding_box_2d_tight")
-# bbox_2d_tight.attach(rp)
-
-# print('Bot Created!')
-
-# # my_controller = OpenController()
-# bot_controller=DifferentialController(name="simple_control", wheel_radius=0.035, wheel_base=0.1125)
-# throttle = 1.0
-# steering = 0.5
-# print("Controller Created!")
-
-# val = 200
-# turn = 80
-# tmp = np.array([np.full(shape=val, fill_value=1), np.full(shape=val, fill_value=2), np.full(shape=val, fill_value=0), 
-#                np.full(shape=val, fill_value=4), np.full(shape=val, fill_value=1), np.full(shape=val, fill_value=3), np.full(shape=val, fill_value=1)])
-
-# i = 0
-# jet_camera.add_motion_vectors_to_frame()
-
-# while kit.is_running():
-#     wr_world.step(render=True)
-#     if i % 100 == 0:
-#         act_val = np.random.randint(0,5,1)
-#         bot_act(jetbot, bot_controller, act_val)
-#         print(jet_camera.get_current_frame())    
-#         imgplot = plt.imshow(jet_camera.get_rgba()[:, :, :3])
-#         plt.show()
-#         print(jet_camera.get_current_frame()["motion_vectors"])
-#     if wr_world.is_playing():
-#         if wr_world.current_time_step_index == 0:
-#             wr_world.reset()
-#     i += 1
-
-# LEATHERBACK
-leatherback_asset_path = assets_root_path + "/Isaac/Robots/Leatherback/leatherback.usd"
-# wr_world.scene.add(
-#     WheeledRobot(
-#         prim_path="/World/Leatherback",
-#         name="Leatherback",
-#         wheel_dof_names=["Wheel__Upright__Rear_Right", "Wheel__Upright__Rear_Left", "Wheel__Knuckle__Front_Right", "Wheel__Knuckle__Front_Left"],
-#         wheel_dof_indices=[13, 16, 24, 25],
-#         create_robot=True,
-#         usd_path=leatherback_asset_path,
-#         position=np.array([0.4, -0.4, 0]),
-#     )
-# )
-
-wr_world.scene.add(
-    WheeledRobot(
-        prim_path="/World/Leatherback",
-        name="Leatherback",
-        wheel_dof_names=["Wheel__Knuckle__Front_Left", "Wheel__Knuckle__Front_Right"],
-        wheel_dof_indices=[24, 25],
-        create_robot=True,
-        usd_path=leatherback_asset_path,
-        position=np.array([0.4, -0.4,0]),
-    )
-)
-leatherback = wr_world.scene.get_object("Leatherback")
-leatherback = ArticulationView(prim_paths_expr="/World/Leatherback" , name="Leatherback")
-print("Leatherback in the World")
-
-# LEATHERBACK CAMERA
-lea_camera = Camera(prim_path="/World/Leatherback/Rigid_Bodies/Chassis/Camera_Right", 
-                    name='Leatherback_Camera',
-                    frequency=30,
-                    resolution=(512,512),
-                    )
-lea_camera.initialize()
-kit.update()
-lea_camera.initialize()
-wr_world.initialize_physics()
-
-# LEATHERBACK LiDAR
-
-# LIDAR RTX
-lea_lidar = wr_world.scene.add(
-    LidarRtx(prim_path="/World/Leatherback/Rigid_Bodies/Chassis/Lidar", 
-             name="Leatherback_Lidar"))
-print("performing reset")
-wr_world.reset()
-print("reset done")
-lea_lidar.add_range_data_to_frame()
-lea_lidar.add_point_cloud_data_to_frame()
-lea_lidar.enable_visualization()
-
-# my_controller = OpenController()
-# bot_controller=DifferentialController(name="simple_control", wheel_radius=0.035, wheel_base=0.1125)
-lea_controller = WheelBasePoseController(name='lea_controller', 
-                                         open_loop_wheel_controller=DifferentialController(name='lea_diff_controller', 
-                                                                                           wheel_radius=0.0995, wheel_base=0.21),
-                                        is_holonomic=False)
-print("Controller Created!")
-print(f"Total DOF : {leatherback.num_dof}")
-print(f"Bot's DOF Names : {leatherback.dof_names}")
-print(f"Bot's DOF  Properties : {leatherback.dof_properties}")
-print(f"Bot's Names Dtype {leatherback.dof_properties.dtype.names}")
-
-i = 0
-reset_needed = False
-while kit.is_running():
-    wr_world.step(render=True)
-    if wr_world.is_stopped() and not reset_needed:
-        reset_needed = True
-    if wr_world.is_playing():
-        if reset_needed:
-            wr_world.reset()
-            # bot_controller.reset()
-            reset_needed = False
-        if i >= 0:
-            with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
-                f.write(str(lea_lidar.get_current_frame()))
-                f.write('\n')
-            if i == 100:
-                act_val = np.random.randint(0,5,1)
-                act_val = np.array([2])
-                print(f"Action Value : {act_val} - {act_dict[act_val[0]]}")
-                bot_act(leatherback, lea_controller, act_val)
-                with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(lea_camera.get_current_frame()))
-                    f.write('\n')
-                # print(lea_camera.get_current_frame())    
-                imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
-                plt.show()
-            if i == 1000:
-                act_val = np.random.randint(0,5,1)
-                act_val = np.array([1])
-                print(f"Action Value : {act_val} - {act_dict[act_val[0]]}")
-                bot_act(leatherback, act_val)
-                with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-                    f.write(str(lea_camera.get_current_frame()))
-                    f.write('\n')
-                # print(lea_camera.get_current_frame())    
-                imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
-                plt.show()
-                    
-                # print(lea_camera.get_current_frame()["motion_vectors"])
-            # print(lea_lidar.get_current_frame())
-            # forward
-            # leatherback.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi/2]))
+        if result:
+            omni.usd.get_context().open_stage(usd_path)
+            self.stage = omni.usd.get_context().get_stage()
+            # stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
         else:
-            break
-        # elif i >= 1000 and i < 1265:
-        #     # rotate
-        #     leatherback.apply_wheel_actions(bot_controller.forward(command=[0.0, np.pi / 12]))
-        # elif i >= 1265 and i < 2000:
-        #     # forward
-        #     leatherback.apply_wheel_actions(bot_controller.forward(command=[0.05, 0]))
-        # elif i == 2000:
-        #     i = 0
-        i += 1
-wr_world.stop()
+            carb.log_error(
+                f"the usd path {usd_path} could not be opened, please make sure that {args.usd_path} is a valid usd file in {self.assets_root_path}"
+            )
+            self.kit.close()
+            sys.exit()
+        self.kit.update()
+        self.kit.update()
 
-# i = 0
-# while kit.is_running():
-#     wr_world.step(render=True)
-#     if i % 100 == 0:
-#         act_val = np.random.randint(0,5,1)
-#         bot_act(leatherback, bot_controller, act_val)
-#         print(lea_camera.get_current_frame())    
-#         imgplot = plt.imshow(lea_camera.get_rgba()[:, :, :3])
-#         plt.show()
-#         print(lea_camera.get_current_frame()["motion_vectors"])
-#     if wr_world.is_playing():
-#         if wr_world.current_time_step_index == 0:
-#             wr_world.reset()
-#     i += 1
+        #print("Loading stage...")
 
-print('loop is done!')
+        while is_stage_loading():
+            self.kit.update()
+        #print("Loading Complete")
 
-# omni.timeline.get_timeline_interface().play()
-# Run in test mode, exit after a fixed number of steps
-if args.test is True:
-    for i in range(10):
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
-else:
-    while kit.is_running():
-        # Run in realtime mode, we don't specify the step size
-        kit.update()
+        self.world = World(physics_dt=physics_dt, rendering_dt=rendering_dt, stage_units_in_meters=1.0)
+        self.timeline = omni.timeline.get_timeline_interface() 
+        self.world.initialize_physics()
+        #print("Waiting Room with Physics initialization in the World!")
 
-# omni.timeline.get_timeline_interface().stop()
+        enable_extension("omni.isaac.debug_draw")
+        # lidar_config = 'RPLIDAR_S2E'
+    
+        self.bot = RLBot(self.world, self.kit, self.timeline, self.assets_root_path)
+        self.controller = RLBotController()
+        self.act = RLBotAct(self.bot.rl_bot, self.controller, n_steps=5)
+        # print("BOT INSITIALIZED")
+        # self.bot.run()
+        print("Bot Initialised!")
+        inav = omni.anim.navigation.core.acquire_interface()
+        print("Navmesh Created!")
+        self.people = PegasusApp(self.world, self.kit, self.timeline)
+        print("People initialised!")
+        self.kit.update()
 
+        # ASYNCIO INITIALIZATION
+        self.loop = asyncio.get_event_loop()
+        self.thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self.thread.start()
+
+        # BOT PARAMETERS
+        self.bot.rl_bot.start_pose = None
+        self.bot.rl_bot.goal_pose = None
+        self.max_velocity = 1.5
+        self.max_angular_velocity = np.pi
+
+        # RL PARAMETERS
+        self.seed(seed)
+        self.reward_range = (-float("inf"), float("inf"))
+        gym.Env.__init__(self)
+        self.action_space = spaces.Box(low=-1.5, high=1.5, shape=(2,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=float("inf"), high=float("inf"), shape=(16,), dtype=np.float32)
+
+        #print(f"Action Space : {self.action_space}")
+        #print(f"Observation Space : {self.observation_space}")
+
+        self.reset_counter = 0
+
+        # REWARD PARAMETERS
+        self.total_reward = {"ep_reward": 0, "ep_social_reward": 0, "ep_path_reward": 0}
+        self.ep_steps = 0
+        self.total_steps = 0
+        self.max_episode_length = max_episode_length
+
+    def _run_event_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def _run_coroutine(self, coro):
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return future.result()
+
+    def reset(self):
+        self.kit.update()
+        self.bot.bot_reset()
+        self.world.reset(True)
+        self.bot.rl_bot.start_pose = self.bot.rl_bot.get_world_pose()
+        self.bot.rl_bot.goal_pose = self._gen_goal_pose()
+        self.kit.update()
+        # self.people.reset() # To be implemented If needed
+        #print(f"Bot's New Pose : {self.bot.rl_bot.get_world_pose()}")
+        #print(f"Bot's Goal Pose : {self.bot.rl_bot.goal_pose}")
+
+        observations = self.get_observations()
+
+        self.total_reward = {"ep_reward": 0, "ep_social_reward": 0, "ep_path_reward": 0}
+        self.ep_steps = 0
+
+        return observations
+
+    def get_observations(self):
+        self.world.render()
+        bot_world_pos, bot_world_ori = self.bot.rl_bot.get_world_pose()
+        bot_lin_vel = self.bot.rl_bot.get_linear_velocity()
+        bot_ang_vel = self.bot.rl_bot.get_angular_velocity()
+        goal_world_pos = self.bot.rl_bot.goal_pose
+        return np.concatenate([bot_world_pos,
+                                bot_world_ori,
+                                bot_lin_vel,
+                                bot_ang_vel,
+                                goal_world_pos])
+
+    # async def step(self, action):  # action = [forward, angular] both within [-1, 1]
+    #     prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+    #     print("Running LiDAR Instance!")
+    #     depth, azimuth, intensity, linear_depth = await self.bot.get_lidar_param()
+        
+    #     print("Lidar Data Shapes:")
+    #     print(f"Depth: {depth.shape}")
+    #     print(f"Azimuth: {azimuth.shape}")
+    #     print(f"Intensity: {intensity.shape}")
+    #     print(f"Linear Depth: {linear_depth.shape}")
+
+    #     lin_vel = action[0] * self.max_velocity
+    #     ang_vel = action[1] * self.max_angular_velocity
+
+    #     for i in range(self._skip_frame):
+    #         self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
+    #         self.world.step(render=False)
+
+    #     observations = self.get_observations()
+    #     info = {
+    #         'lidar_depth': depth,
+    #         'lidar_azimuth': azimuth,
+    #         'lidar_intensity': intensity,
+    #         'lidar_linear_depth': linear_depth
+    #     }
+    #     done = False
+    #     if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
+    #         done = True
+    #     goal_pos = self.bot.rl_bot.goal_pose
+    #     cur_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+    #     prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
+    #     cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+    #     reward = prev_dist_to_goal - cur_dist_to_goal
+    #     if cur_dist_to_goal < 0.1:
+    #         done = True
+    #     return observations, reward, done, info
+    
+    def step(self, action):
+        prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+        print("Running LiDAR Instance!")
+        # depth, azimuth, intensity, linear_depth = self._run_coroutine(self.bot.get_lidar_param())
+        depth, azimuth, intensity, linear_depth = self.bot.get_lidar_param()
+        # depth, azimuth, intensity, linear_depth = self.loop.run_until_complete(self.bot.get_lidar_param())
+        print("Lidar Data Shapes:")
+        print(f"Depth: {depth.shape}")
+        print(f"Azimuth: {azimuth.shape}")
+        print(f"Intensity: {intensity.shape}")
+        print(f"Linear Depth: {linear_depth.shape}")
+
+        lin_vel = action[0] * self.max_velocity
+        ang_vel = action[1] * self.max_angular_velocity
+
+        for i in range(self._skip_frame):
+            self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
+            self.world.step(render=False)
+
+        observations = self.get_observations()
+        info = {
+            'lidar_depth': depth,
+            'lidar_azimuth': azimuth,
+            'lidar_intensity': intensity,
+            'lidar_linear_depth': linear_depth
+        }
+        done = False
+        if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
+            done = True
+        goal_pos = self.bot.rl_bot.goal_pose
+        cur_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+        prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
+        cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+        reward = prev_dist_to_goal - cur_dist_to_goal
+        if cur_dist_to_goal < 0.1:
+            done = True
+        return observations, reward, done, info                  
+
+    # def step(self, action):  # action = [forward, angular] both within [-1, 1]
+    #     # self.world.step(True)
+    #     prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+    #     print("Running LiDAR Instance!")
+    #     lidar_data = self.loop.run_until_complete(self.bot.run_lidar_instance())
+    #     # lidar_data = self.bot.run_lidar_instance()
+    #     print(lidar_data.shape)
+    #     print(len(lidar_data))
+
+    #     lin_vel = action[0] * self.max_velocity
+    #     ang_vel = action[1] * self.max_angular_velocity
+
+    #     for i in range(self._skip_frame):
+    #         self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
+    #         self.world.step(render=False)
+
+    #     observations = self.get_observations()
+    #     info = {}
+    #     done = False
+    #     if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
+    #         done = True
+    #     goal_pos = self.bot.rl_bot.goal_pose
+    #     cur_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+    #     prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
+    #     cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+    #     reward = prev_dist_to_goal - cur_dist_to_goal
+    #     if cur_dist_to_goal < 0.1:
+    #         done = True
+    #     return observations, reward, done, info
+    #     # All actiohns and reward computations
+
+    def _gen_goal_pose(self):
+        import random
+        new_pos = np.array([random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
+                            random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
+                            0.0])
+        return new_pos
+    
+    def seed(self, seed=None):
+        self.np_random, seed = gym.utils.seeding.np_random(seed)
+        np.random.seed(seed)
+        return [seed]
+    
+    def render(self, mode='human'):
+        self.world.render()
+
+    def close(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join()
+        self.kit.close()
+
+# def test_task(env):
+#     i = 1
+#     reset_needed = False
+#     while env.kit.is_running():
+#         env.timeline.play()
+#         env.world.step(render=True)
+#         if env.world.is_stopped() and not reset_needed:
+#             reset_needed = True
+#         if env.world.is_playing():
+#             if i % 500 != 0:
+#                 with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
+#                     f.write(str(env.bot.rl_bot_lidar.get_current_frame()))
+#                     f.write('\n')
+#                 if i % 150 == 0:
+#                     rand_val = np.random.uniform(-2,2,1)
+#                     rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+#                     #print(f"Applied Action Values : {rand_val}")
+#                     env.act.move_bot(vals=rand_val)
+#                     with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
+#                         f.write(str(env.bot.rl_bot_camera.get_current_frame()))
+#                         f.write('\n')
+#                     imgplot = plt.imshow(env.bot.rl_bot_camera.get_rgba()[:, :, :3])
+#                     plt.show()
+#             else:
+#                 # carb.log_warn("PegasusApp Simulation App is closing.")
+#                 #print("Simulation Done!")
+#                 # env.timeline.stop()
+#                 # env.world.stop()
+#                 env.reset()
+#                 # env.kit.update()
+#                 # env.world.reset(True)
+#                 # env.kit.update()
+#                 # env.kit.close()
+#                 # break
+#             i += 1
+#     # env.world.stop()
+#     #print('loop is done!')
+
+def run_episode(my_env):
+    for _ in range(20):
+        obs = my_env.reset()
+        done = False
+        total_rew = 0
+        i = 0
+        while not done:
+            if i % 10 == 0:
+                actions = np.random.uniform(-1, 1, 2)
+                actions = np.clip(actions, -1.5, 1.5)
+                obs, reward, done, info = my_env.step(actions)
+                total_rew += reward
+                my_env.render()
+                my_env.kit.update()
+                # Access lidar data if needed
+                lidar_depth = info['lidar_depth']
+                with open(f'/home/rah_m/Isaac_Lidar/lidar_depth_{i}.txt', 'w') as f:
+                    f.write(str(lidar_depth))
+                    f.write('\n')
+                print(lidar_depth.shape )
+                lidar_azimuth = info['lidar_azimuth']
+                with open(f'/home/rah_m/Isaac_Lidar/lidar_azimuth_{i}.txt', 'w') as f:
+                    f.write(str(lidar_azimuth))
+                    f.write('\n')
+                print(lidar_azimuth.shape)
+                lidar_intensity = info['lidar_intensity']
+                with open(f'/home/rah_m/Isaac_Lidar/lidar_intensity_{i}.txt', 'w') as f:
+                    f.write(str(lidar_intensity))
+                    f.write('\n')
+                print(lidar_intensity.shape)
+                lidar_linear_depth = info['lidar_linear_depth']
+                with open(f'/home/rah_m/Isaac_Lidar/lidar_linear_depth_{i}.txt', 'w') as f:
+                    f.write(str(lidar_linear_depth))
+                    f.write('\n')
+                print(lidar_linear_depth.shape)
+            i += 1
+
+if __name__ == '__main__':
+
+    my_env = SocEnv()
+    print("Environment Created!")
+    my_env.reset()
+    print("Environment Reset!")
+
+    asyncio.run(run_episode(my_env=my_env))
+    my_env.close()
+
+    # for _ in range(20):
+    #     obs = my_env.reset()
+    #     done = False
+    #     total_rew = 0
+    #     i = 0
+    #     while not done:
+    #         if i % 10000 == 0:
+    #             #print(f"Step : {i}")
+    #             actions = np.random.uniform(-1, 1, 2)
+    #             #print(f"Actions : {actions}")
+    #             obs, reward, done, info = my_env.step(actions)
+    #             #print(f"Observations : {obs}")
+    #             #print(f"Reward : {reward}")
+    #             total_rew += reward
+    #             #print(f"Total Reward : {total_rew}")
+    #             my_env.render()
+    #             my_env.kit.update()
+    #         i += 1
+
+    # my_env.close()
