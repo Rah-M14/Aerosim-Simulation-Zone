@@ -38,10 +38,14 @@ class RLBot():
             create_robot=True,
             usd_path=self.rl_bot_asset_path,
             position=np.array([0.4, -0.4,0]))
+        # self.rl_bot_carter.initialize()
+        # self.rl_bot_carter.set_enabled_self_collisions(True)
         self.world.scene.add(self.rl_bot_carter) 
 
         self.rl_bot = ArticulationView(prim_paths_expr="/World/Nova_Carter", name="RL_Bot")
+        # self.rl_bot.initialize()
         self.rl_bot = self.world.scene.get_object("RL_Bot")
+        # self.rl_bot.initialize()
         print(f"RL_Bot : {self.rl_bot}")
         print("RL Bot in the World")
 
@@ -57,137 +61,89 @@ class RLBot():
         self.world.initialize_physics()
 
         # CARTER LiDAR
-        # self.rl_bot_lidar = self.world.scene.add(
-        #     LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
-        #             name="Carter_Lidar", config="RPLIDAR_S2E_Soc_Nav"))
-        # print(f"RL_Bot LiDAR : {self.rl_bot_lidar}")
-        # print("performing reset")
-        # self.world.reset()
-        # print("reset done")
-        # self.rl_bot_lidar.add_range_data_to_frame()
-        # self.rl_bot_lidar.add_point_cloud_data_to_frame()
-        # self.rl_bot_lidar.enable_visualization()
-        # print("RL Bot Initialized!")
+        self.rl_bot_lrtx = LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
+                    name="Carter_Lidar")
+        self.rl_bot_lidar = self.world.scene.add(self.rl_bot_lrtx)
+        print(f"RL_Bot LiDAR : {self.rl_bot_lidar}")
+        print(type(self.rl_bot_lidar))
+        print(f"lrtx : {self.rl_bot_lrtx}")
+        print(type(self.rl_bot_lrtx))
+        print("performing reset")
+        self.world.reset()
+        print("reset done")
+        # self.rl_bot_lrtx.set_dt(0.1)
+        # self.rl_bot_lrtx.set_frequency(10.0)
+        self.rl_bot_lrtx.add_range_data_to_frame()
+        self.rl_bot_lrtx.add_point_cloud_data_to_frame()
+        self.rl_bot_lrtx.enable_visualization()
+        print("RL Bot Initialized!")
         
-        # LIDAR
-
-        # from omni.isaac.range_sensor import 
-        lidar_config = "RPLIDAR_S2E_Soc_Nav"
-        enable_extension("omni.isaac.debug_draw")
-
-        self.lsi = acquire_lidar_sensor_interface()
-
-        result, self.rl_bot_lidar = omni.kit.commands.execute(
-                        "RangeSensorCreateLidar",
-                        path="/Nova_Carter/chassis_link/XT_32/RPLIDAR_Req",
-                        parent="/World",
-                        min_range=0.4,
-                        max_range=10.0,
-                        draw_points=True,
-                        draw_lines=True,
-                        horizontal_fov=360.0,
-                        vertical_fov=30.0,
-                        horizontal_resolution=0.4,
-                        vertical_resolution=4.0,
-                        rotation_rate=20.0,
-                        high_lod=False,
-                        yaw_offset=0.0,
-                        enable_semantics=False)
+        # # LIDAR
+        # self.lsi = acquire_lidar_sensor_interface()
+        # result, self.rl_bot_lidar = omni.kit.commands.execute(
+        #                 "RangeSensorCreateLidar",
+        #                 path="/Nova_Carter/chassis_link/XT_32/RPLIDAR_Req",
+        #                 parent="/World",
+        #                 min_range=0.4,
+        #                 max_range=5.0,
+        #                 draw_points=True,
+        #                 draw_lines=True,
+        #                 horizontal_fov=360.0,
+        #                 vertical_fov=30.0,
+        #                 horizontal_resolution=1.0,
+        #                 vertical_resolution=4.0,
+        #                 rotation_rate=100.0,
+        #                 high_lod=False,
+        #                 yaw_offset=0.0,
+        #                 enable_semantics=False)
         
-        print(f"Lidar Created - Result : {result}")        
-        self.lidar_path = str(self.rl_bot_lidar.GetPath())
-        self.lsi = acquire_lidar_sensor_interface(plugin_name="omni.isaac.range_sensor.plugin")
+        # print(f"Lidar Created - Result : {result}")        
+        # self.lidar_path = str(self.rl_bot_lidar.GetPath())
+        # self.lsi = acquire_lidar_sensor_interface(plugin_name="omni.isaac.range_sensor.plugin")
 
-        # print(f"path of lidar : {self.lidar_path}")
-        # print(type(self.lidar_path))
+        # # RTX LIDAR
+        # lidar_config = "Soc_Lidar"
+        # # 1. Create The Camera
+        # _, self.rl_bot_lidar = omni.kit.commands.execute(
+        #     "IsaacSensorCreateRtxLidar",
+        #     path="/PandarXT_32_10hz",
+        #     parent="/World/Nova_Carter/chassis_link/XT_32",
+        #     config=lidar_config,
+        #     translation=(0, 0, 0.0),
+        #     orientation=Gf.Quatd(1,0,0,0),
+        # )
+        # render_product = rep.create.render_product(self.rl_bot_lidar.GetPath(), [1, 1])
 
-        # if self.lidar_path == "/World/Nova_Carter/chassis_link/XT_32/RPLIDAR_Req":
-        #     print("Lidar Path is valid")
+        # annotator = rep.AnnotatorRegistry.get_annotator("RtxSensorCpuIsaacCreateRTXLidarScanBuffer")
+        # annotator.attach(render_product)
 
-        # print(f"Type of lsi : {type(self.lsi)}")
-        # print("lidar sensor interface acquired")
+        # writer = rep.writers.get("RtxLidarDebugDrawPointCloudBuffer")
+        # writer.attach(render_product)
+        # # self.rl_bot_lidar.add_range_data_to_frame()
+        # # self.rl_bot_lidar.add_point_cloud_data_to_frame()
+        # # self.rl_bot_lidar.enable_visualization()
 
-        # if self.lsi.is_lidar_sensor(self.lidar_path):
-        #     print("lidar sensor is valid")
-
-    # async def get_lidar_param(self):
-    #         await omni.kit.app.get_app().next_update_async()
-    #         self.timeline.pause()
-    #         depth = self.lsi.get_linear_depth_data(self.lidar_path)
-    #         azimuth = self.lsi.get_azimuth_data(self.lidar_path)
-    #         intensity = self.lsi.get_intensity_data(self.lidar_path)
-    #         linear_depth = self.lsi.get_linear_depth_data(self.lidar_path)
-    #         self.timeline.play()
-    #         return (depth, azimuth, intensity, linear_depth)
-
-    def get_lidar_param(self):
+    def get_lidar_feed(self):
         self.kit.update()
         self.timeline.pause()
+        point_cloud = self.lsi.get_point_cloud_data(self.lidar_path)
         depth = self.lsi.get_linear_depth_data(self.lidar_path)
         azimuth = self.lsi.get_azimuth_data(self.lidar_path)
         intensity = self.lsi.get_intensity_data(self.lidar_path)
         linear_depth = self.lsi.get_linear_depth_data(self.lidar_path)
+        num_rows = self.lsi.get_num_rows(self.lidar_path)
+        num_cols_ticked = self.lsi.get_num_cols_ticked(self.lidar_path)
         self.timeline.play()
         self.kit.update()
-        return (depth, azimuth, intensity, linear_depth)
+        return [point_cloud, (depth, azimuth, linear_depth, intensity, num_rows, num_cols_ticked)]
 
-    async def run_lidar_instance(self):
-        self.timeline.play()
-        # lidar_data = asyncio.ensure_future(self.get_lidar_param())
-        lidar_data = await self.get_lidar_param()
-        print("Lidar Data : ", lidar_data)
-        return lidar_data
-        
-        # # if self.rl_bot_lidar_interface.is_lidar_sensor(lidar_path):
-        # #     print("lidar sensor is valid")
-
-        # print("Lidar Created!")
-        # # depth = self.lsi.get_linear_depth_data(lidar_path)
-
-        # # dep_data = self.lsi.get_depth_data("/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E_01")
-        # # print(f"Depth Data : {depth}")
-
-        # # 1. Create The Lidar
-        # _, self.rl_bot_lidar = omni.kit.commands.execute(
-        #     "IsaacSensorCreateRtxLidar",
-        #     path="/RPLIDAR_S2E",
-        #     parent="/World/Nova_Carter/chassis_link/front_RPLidar",
-        #     config=lidar_config,
-        #     translation=(0, 0, 0.0),
-        #     orientation=Gf.Quatd(1,0,0,0),
-
-        # )
-
-        # print(f"RL_Bot_Lidar Path : {self.rl_bot_lidar.GetPath()}")
-
-        # hydra_texture = rep.create.render_product(self.rl_bot_lidar.GetPath(), [1, 1], name="Isaac")
-        # simulation_context = SimulationContext(physics_dt=1.0 / 60.0, rendering_dt=1.0 / 60.0, stage_units_in_meters=1.0)
-        # self.kit.update()
-
-        # # 2. Create and Attach a render product to the camera
-        # render_product = rep.create.render_product(self.rl_bot_lidar.GetPath(), [1, 1])
-
-        # # 3. Create Annotator to read the data from with annotator.get_data()
-        # annotator = rep.AnnotatorRegistry.get_annotator("RtxSensorCpuIsaacCreateRTXLidarScanBuffer")
-        # annotator.initialize(outputTimestamp=True)
-        # annotator.attach(render_product)
-
-        # # 4. Create a Replicator Writer that "writes" points into the scene for debug viewing
-        # # writer = rep.writers.get("RtxLidarDebugDrawPointCloudBuffer")
-        # # writer.initialize(output_dir=f"/home/rah_m/Isaac_World_Files/")
-        # # writer.attach(render_product)
-
-        # writer = rep.writers.get("RtxLidar" + "DebugDrawPointCloud" + "Buffer")
-
-        # # writer.initialize(output_dir=f"/home/rah_m/Isaac_World_Files/")
-        # writer.attach([hydra_texture])
-
-        # self.kit.update()
-        # simulation_context.play()
-
-        # Bot Parameters
-        # self.rl_bot.current_state = self.rl_bot.get_world_pose()
-
+    # async def run_lidar_instance(self):
+    #     self.timeline.play()
+    #     # lidar_data = asyncio.ensure_future(self.get_lidar_param())
+    #     lidar_data = await self.get_lidar_param()
+    #     print("Lidar Data : ", lidar_data)
+    #     return lidar_data
+    
     def bot_reset(self):
         valid_pos_x = random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200)))))))
         valid_pos_y = random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100)))))

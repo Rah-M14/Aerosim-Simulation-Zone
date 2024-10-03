@@ -8,13 +8,14 @@ import math
 import asyncio
 import threading
 import carb
+import json
 
 class SocEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
     
     def __init__(
         self,
-        skip_frame=10,
+        skip_frame=1,
         physics_dt=1.0 / 60.0,
         rendering_dt=1.0 / 60.0,
         max_episode_length=10000000,
@@ -49,7 +50,7 @@ class SocEnv(gym.Env):
         import asyncio
         import threading
 
-        from pxr import Usd, Vt, Gf
+        from pxr import Usd, UsdPhysics, UsdGeom, Vt, Gf, Sdf
 
         import asyncio
         from stable_baselines3 import PPO
@@ -98,8 +99,8 @@ class SocEnv(gym.Env):
         self.kit.update()
 
         from RL_Bot_Control import RLBotController, RLBotAct
-        # from RL_Bot import RLBot
-        from RLBL import RLBot
+        from RL_Bot import RLBot
+        # from RLBL import RLBot
         # from Pegasus_App import PegasusApp
         from Mod_Pegasus_App import PegasusApp
 
@@ -118,6 +119,7 @@ class SocEnv(gym.Env):
         if result:
             omni.usd.get_context().open_stage(usd_path)
             self.stage = omni.usd.get_context().get_stage()
+            self.scene = UsdPhysics.Scene.Define(self.stage, "/physicsScene")
             # stage = Usd.Stage.Open('omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd')
         else:
             carb.log_error(
@@ -142,7 +144,7 @@ class SocEnv(gym.Env):
         enable_extension("omni.isaac.debug_draw")
         # lidar_config = 'RPLIDAR_S2E'
     
-        self.bot = RLBot(self.world, self.kit, self.timeline, self.assets_root_path)
+        self.bot = RLBot(simulation_app=self.kit, world=self.world, timeline=self.timeline, assets_root_path=self.assets_root_path)
         self.controller = RLBotController()
         self.act = RLBotAct(self.bot.rl_bot, self.controller, n_steps=5)
         # print("BOT INSITIALIZED")
@@ -150,14 +152,9 @@ class SocEnv(gym.Env):
         print("Bot Initialised!")
         inav = omni.anim.navigation.core.acquire_interface()
         print("Navmesh Created!")
-        self.people = PegasusApp(self.world, self.kit, self.timeline)
+        self.people = PegasusApp(self.world, self.stage, self.kit, self.timeline)
         print("People initialised!")
         self.kit.update()
-
-        # ASYNCIO INITIALIZATION
-        self.loop = asyncio.get_event_loop()
-        self.thread = threading.Thread(target=self._run_event_loop, daemon=True)
-        self.thread.start()
 
         # BOT PARAMETERS
         self.bot.rl_bot.start_pose = None
@@ -172,9 +169,6 @@ class SocEnv(gym.Env):
         self.action_space = spaces.Box(low=-1.5, high=1.5, shape=(2,), dtype=np.float32)
         self.observation_space = spaces.Box(low=float("inf"), high=float("inf"), shape=(16,), dtype=np.float32)
 
-        #print(f"Action Space : {self.action_space}")
-        #print(f"Observation Space : {self.observation_space}")
-
         self.reset_counter = 0
 
         # REWARD PARAMETERS
@@ -183,13 +177,13 @@ class SocEnv(gym.Env):
         self.total_steps = 0
         self.max_episode_length = max_episode_length
 
-    def _run_event_loop(self):
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
+    # def _run_event_loop(self):
+    #     asyncio.set_event_loop(self.loop)
+    #     self.loop.run_forever()
 
-    def _run_coroutine(self, coro):
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result()
+    # def _run_coroutine(self, coro):
+    #     future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+    #     return future.result()
 
     def reset(self):
         self.kit.update()
@@ -198,9 +192,6 @@ class SocEnv(gym.Env):
         self.bot.rl_bot.start_pose = self.bot.rl_bot.get_world_pose()
         self.bot.rl_bot.goal_pose = self._gen_goal_pose()
         self.kit.update()
-        # self.people.reset() # To be implemented If needed
-        #print(f"Bot's New Pose : {self.bot.rl_bot.get_world_pose()}")
-        #print(f"Bot's Goal Pose : {self.bot.rl_bot.goal_pose}")
 
         observations = self.get_observations()
 
@@ -221,69 +212,37 @@ class SocEnv(gym.Env):
                                 bot_ang_vel,
                                 goal_world_pos])
 
-    # async def step(self, action):  # action = [forward, angular] both within [-1, 1]
-    #     prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
-    #     print("Running LiDAR Instance!")
-    #     depth, azimuth, intensity, linear_depth = await self.bot.get_lidar_param()
-        
-    #     print("Lidar Data Shapes:")
-    #     print(f"Depth: {depth.shape}")
-    #     print(f"Azimuth: {azimuth.shape}")
-    #     print(f"Intensity: {intensity.shape}")
-    #     print(f"Linear Depth: {linear_depth.shape}")
-
-    #     lin_vel = action[0] * self.max_velocity
-    #     ang_vel = action[1] * self.max_angular_velocity
-
-    #     for i in range(self._skip_frame):
-    #         self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
-    #         self.world.step(render=False)
-
-    #     observations = self.get_observations()
-    #     info = {
-    #         'lidar_depth': depth,
-    #         'lidar_azimuth': azimuth,
-    #         'lidar_intensity': intensity,
-    #         'lidar_linear_depth': linear_depth
-    #     }
-    #     done = False
-    #     if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
-    #         done = True
-    #     goal_pos = self.bot.rl_bot.goal_pose
-    #     cur_bot_pos, _ = self.bot.rl_bot.get_world_pose()
-    #     prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
-    #     cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-    #     reward = prev_dist_to_goal - cur_dist_to_goal
-    #     if cur_dist_to_goal < 0.1:
-    #         done = True
-    #     return observations, reward, done, info
-    
     def step(self, action):
         prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
-        print("Running LiDAR Instance!")
+        # print("Running LiDAR Instance!")
         # depth, azimuth, intensity, linear_depth = self._run_coroutine(self.bot.get_lidar_param())
-        depth, azimuth, intensity, linear_depth = self.bot.get_lidar_param()
-        # depth, azimuth, intensity, linear_depth = self.loop.run_until_complete(self.bot.get_lidar_param())
-        print("Lidar Data Shapes:")
-        print(f"Depth: {depth.shape}")
-        print(f"Azimuth: {azimuth.shape}")
-        print(f"Intensity: {intensity.shape}")
-        print(f"Linear Depth: {linear_depth.shape}")
+        # [point_cloud, (depth, linear_depth, azimuth, intensity, num_rows, num_cols_ticked)] = self.bot.get_lidar_feed()
+        # print("Feed acquired!")
 
-        lin_vel = action[0] * self.max_velocity
-        ang_vel = action[1] * self.max_angular_velocity
+        # lin_vel = action[0] * self.max_velocity
+        # ang_vel = action[1] * self.max_angular_velocity
 
-        for i in range(self._skip_frame):
-            self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
-            self.world.step(render=False)
+        # for i in range(self._skip_frame):
+        #     self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
+        #     self.world.step(render=False)
 
         observations = self.get_observations()
-        info = {
-            'lidar_depth': depth,
-            'lidar_azimuth': azimuth,
-            'lidar_intensity': intensity,
-            'lidar_linear_depth': linear_depth
-        }
+        info = {}
+
+        lidar_data = self.bot.lidar_data()
+        print(type(self.bot.lidar_data()))
+        info['lidar_data'] = lidar_data
+        
+        # info = {
+        #     'lidar_point_cloud' : point_cloud,
+        #     'lidar_depth': depth,
+        #     'lidar_linear_depth': linear_depth,
+        #     'lidar_azimuth': azimuth,
+        #     'lidar_intensity': intensity,
+        #     'lidar_num_rows': num_rows,
+        #     'lidar_num_cols_ticked': num_cols_ticked
+        # }
+        
         done = False
         if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
             done = True
@@ -295,37 +254,6 @@ class SocEnv(gym.Env):
         if cur_dist_to_goal < 0.1:
             done = True
         return observations, reward, done, info                  
-
-    # def step(self, action):  # action = [forward, angular] both within [-1, 1]
-    #     # self.world.step(True)
-    #     prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
-    #     print("Running LiDAR Instance!")
-    #     lidar_data = self.loop.run_until_complete(self.bot.run_lidar_instance())
-    #     # lidar_data = self.bot.run_lidar_instance()
-    #     print(lidar_data.shape)
-    #     print(len(lidar_data))
-
-    #     lin_vel = action[0] * self.max_velocity
-    #     ang_vel = action[1] * self.max_angular_velocity
-
-    #     for i in range(self._skip_frame):
-    #         self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
-    #         self.world.step(render=False)
-
-    #     observations = self.get_observations()
-    #     info = {}
-    #     done = False
-    #     if self.world.current_time_step_index - self._steps_after_reset >= self._max_episode_length:
-    #         done = True
-    #     goal_pos = self.bot.rl_bot.goal_pose
-    #     cur_bot_pos, _ = self.bot.rl_bot.get_world_pose()
-    #     prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
-    #     cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-    #     reward = prev_dist_to_goal - cur_dist_to_goal
-    #     if cur_dist_to_goal < 0.1:
-    #         done = True
-    #     return observations, reward, done, info
-    #     # All actiohns and reward computations
 
     def _gen_goal_pose(self):
         import random
@@ -347,43 +275,15 @@ class SocEnv(gym.Env):
         self.thread.join()
         self.kit.close()
 
-# def test_task(env):
-#     i = 1
-#     reset_needed = False
-#     while env.kit.is_running():
-#         env.timeline.play()
-#         env.world.step(render=True)
-#         if env.world.is_stopped() and not reset_needed:
-#             reset_needed = True
-#         if env.world.is_playing():
-#             if i % 500 != 0:
-#                 with open('/home/rah_m/Isaac_World_Files/lidar_data.txt', 'a+') as f:
-#                     f.write(str(env.bot.rl_bot_lidar.get_current_frame()))
-#                     f.write('\n')
-#                 if i % 150 == 0:
-#                     rand_val = np.random.uniform(-2,2,1)
-#                     rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
-#                     #print(f"Applied Action Values : {rand_val}")
-#                     env.act.move_bot(vals=rand_val)
-#                     with open('/home/rah_m/Isaac_World_Files/camera_data.txt', 'a+') as f:
-#                         f.write(str(env.bot.rl_bot_camera.get_current_frame()))
-#                         f.write('\n')
-#                     imgplot = plt.imshow(env.bot.rl_bot_camera.get_rgba()[:, :, :3])
-#                     plt.show()
-#             else:
-#                 # carb.log_warn("PegasusApp Simulation App is closing.")
-#                 #print("Simulation Done!")
-#                 # env.timeline.stop()
-#                 # env.world.stop()
-#                 env.reset()
-#                 # env.kit.update()
-#                 # env.world.reset(True)
-#                 # env.kit.update()
-#                 # env.kit.close()
-#                 # break
-#             i += 1
-#     # env.world.stop()
-#     #print('loop is done!')
+def convert_to_serializable(data):
+    if isinstance(data, dict):
+        return {key: convert_to_serializable(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [convert_to_serializable(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()  # Convert ndarray to list
+    else:
+        return data  # Return as is for other types
 
 def run_episode(my_env):
     for _ in range(20):
@@ -392,35 +292,85 @@ def run_episode(my_env):
         total_rew = 0
         i = 0
         while not done:
-            if i % 10 == 0:
-                actions = np.random.uniform(-1, 1, 2)
-                actions = np.clip(actions, -1.5, 1.5)
+            if i % 100 == 0:
+                actions = np.clip(np.random.uniform(-1, 1, 2), -1.5, 1.5)
+                print(f"stepping at {i} with actions {actions}")
                 obs, reward, done, info = my_env.step(actions)
                 total_rew += reward
+                pos, _ = my_env.bot.rl_bot.get_world_pose()
+
+                lidar_data = info['lidar_data']
+                print(f"Lidar Data Shape: {lidar_data.shape}")
+
                 my_env.render()
                 my_env.kit.update()
-                # Access lidar data if needed
-                lidar_depth = info['lidar_depth']
-                with open(f'/home/rah_m/Isaac_Lidar/lidar_depth_{i}.txt', 'w') as f:
-                    f.write(str(lidar_depth))
-                    f.write('\n')
-                print(lidar_depth.shape )
-                lidar_azimuth = info['lidar_azimuth']
-                with open(f'/home/rah_m/Isaac_Lidar/lidar_azimuth_{i}.txt', 'w') as f:
-                    f.write(str(lidar_azimuth))
-                    f.write('\n')
-                print(lidar_azimuth.shape)
-                lidar_intensity = info['lidar_intensity']
-                with open(f'/home/rah_m/Isaac_Lidar/lidar_intensity_{i}.txt', 'w') as f:
-                    f.write(str(lidar_intensity))
-                    f.write('\n')
-                print(lidar_intensity.shape)
-                lidar_linear_depth = info['lidar_linear_depth']
-                with open(f'/home/rah_m/Isaac_Lidar/lidar_linear_depth_{i}.txt', 'w') as f:
-                    f.write(str(lidar_linear_depth))
-                    f.write('\n')
-                print(lidar_linear_depth.shape)
+
+                np.save(f'/home/rah_m/new_lidar_data/new4/lidar_data_{i}_{pos}.npy', lidar_data)
+
+            my_env.kit.update()
             i += 1
+
+# def run_episode(my_env):
+#     for _ in range(20):
+#         obs = my_env.reset()
+#         done = False
+#         total_rew = 0
+#         i = 0
+#         while not done:
+#             if i % 100 == 0:
+#                 actions = np.clip(np.random.uniform(-1, 1, 2), -1.5,1.5)
+#                 print(f"stepping at {i} with actions {actions}")
+#                 obs, reward, done, info = my_env.step(actions)
+#                 total_rew += reward
+#                 pos,_ = my_env.bot.rl_bot.get_world_pose()
+#                 asyncio.ensure_future(my_env.bot.lidar_data())
+
+
+#                 my_env.render()
+#                 my_env.kit.update()
+#                 # print(type(my_env.bot.rl_bot_lidar))
+#                 # print(type(my_env.bot.rl_bot_lidar.get_current_frame()))
+#                 # l_data = wr_bot.lsi.get_point_cloud_data("/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E")
+#                 # print(f"Lidar Data: {l_data}")
+#                 # with open(f'/home/rah_m/new_lidar_data/new/lidar_data_{pos}_{i}.json', 'w') as f:
+#                 #     json.dump(convert_to_serializable(my_env.bot.rl_bot_lidar.get_current_frame()), f)
+#                 # Access lidar data if needed
+#                 # lidar_point_cloud = info['lidar_point_cloud']
+#                 # pos, ori = my_env.bot.rl_bot.get_world_pose()
+#                 # np.save(f'/home/rah_m/lidar_data/point_cloud/lidar_point_cloud_{i}_{pos}.npy', lidar_point_cloud)
+#                 # print(lidar_point_cloud.shape)
+#                 # lidar_depth = info['lidar_depth']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_depth_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_depth))
+#                 #     f.write('\n')
+#                 # print(lidar_depth.shape )
+#                 # lidar_azimuth = info['lidar_azimuth']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_azimuth_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_azimuth))
+#                 #     f.write('\n')
+#                 # print(lidar_azimuth.shape)
+#                 # lidar_intensity = info['lidar_intensity']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_intensity_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_intensity))
+#                 #     f.write('\n')
+#                 # print(lidar_intensity.shape)
+#                 # lidar_linear_depth = info['lidar_linear_depth']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_linear_depth_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_linear_depth))
+#                 #     f.write('\n')
+#                 # print(lidar_linear_depth.shape)
+#                 # lidar_num_rows = info['lidar_num_rows']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_num_rows_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_num_rows))
+#                 #     f.write('\n')
+#                 # print(lidar_num_rows)
+#                 # lidar_num_cols_ticked = info['lidar_num_cols_ticked']
+#                 # with open(f'/home/rah_m/lidar_data/lidar_num_cols_ticked_{i}.txt', 'w') as f:
+#                 #     f.write(str(lidar_num_cols_ticked))
+#                 #     f.write('\n')
+#                 # print(lidar_num_cols_ticked)
+#             my_env.kit.update()
+#             i += 1
 
 if __name__ == '__main__':
 
@@ -429,7 +379,7 @@ if __name__ == '__main__':
     my_env.reset()
     print("Environment Reset!")
 
-    asyncio.run(run_episode(my_env=my_env))
+    run_episode(my_env=my_env)
     my_env.close()
 
     # for _ in range(20):

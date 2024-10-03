@@ -67,26 +67,6 @@ from Mod_Pegasus_App import PegasusApp
 # from Pegasus_App import PegasusApp
 
 # THE WORLD SECTION STARTS HERE
-
-def convert_to_serializable(data):
-    """
-    Convert numpy ndarrays to lists for JSON serialization.
-    
-    Args:
-        data: The data to convert (can be a dict, list, or ndarray).
-        
-    Returns:
-        The converted data.
-    """
-    if isinstance(data, dict):
-        return {key: convert_to_serializable(value) for key, value in data.items()}
-    elif isinstance(data, list):
-        return [convert_to_serializable(item) for item in data]
-    elif isinstance(data, np.ndarray):
-        return data.tolist()  # Convert ndarray to list
-    else:
-        return data  # Return as is for other types
-
 assets_root_path = get_assets_root_path()
 if assets_root_path is None:
     carb.log_error("Could not find Isaac Sim assets folder")
@@ -158,25 +138,25 @@ while kit.is_running():
         #     reset_needed = False
         if i:
             # print(wr_bot.rl_bot_lidar.get_current_frame())
-            # print(type(wr_bot.rl_bot_lidar.get_current_frame()))
+            print(type(wr_bot.rl_bot_lidar.get_current_frame()))
             pos,_ = wr_bot.rl_bot.get_world_pose()
-            l_data = wr_bot.lsi.get_point_cloud_data("/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E")
-            print(f"Lidar Data: {l_data}")
-            # with open(f'/home/rah_m/Isaac_World_Files/lidar_data_{pos}_{i}.json', 'w') as f:
-            #     json.dump(convert_to_serializable(wr_bot.rl_bot_lidar.get_current_frame()), f)
+            # l_data = wr_bot.lsi.get_point_cloud_data("/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E")
+            # print(f"Lidar Data: {l_data}")
+            with open(f'/home/rah_m/new_lidar_data/lidar_data_{pos}_{i}.json', 'w') as f:
+                json.dump(convert_to_serializable(wr_bot.rl_bot_lidar.get_current_frame()), f)
                 # f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
                 # f.write('\n')
-            if i:
-                # rand_val = np.random.uniform(-2,2,1)
-                # rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
-                # print(f"Applied Action Values : {rand_val}")
-                # wr_bot_act.move_bot(vals=rand_val)
-                # with open(f'/home/rah_m/Isaac_World_Files/camera_data_{i}.json', 'w') as f:
-                #     json.dump(convert_to_serializable(wr_bot.rl_bot_camera.get_current_frame()), f)
-                #     f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
-                #     f.write('\n')
-                # imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
-                plt.show()
+        # if i:
+        #     rand_val = np.random.uniform(-2,2,1)
+        #     rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+        #     print(f"Applied Action Values : {rand_val}")
+        #     wr_bot_act.move_bot(vals=rand_val)
+        #     # with open(f'/home/rah_m/Isaac_World_Files/camera_data_{i}.json', 'w') as f:
+        #     #     json.dump(convert_to_serializable(wr_bot.rl_bot_camera.get_current_frame()), f)
+        #     #     f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
+        #     #     f.write('\n')
+        #     # imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
+        #     plt.show()
         else:
             # carb.log_warn("PegasusApp Simulation App is closing.")
             print("Simulation Done!")

@@ -3,17 +3,21 @@ from omni.isaac.wheeled_robots.robots import WheeledRobot
 from omni.isaac.core.articulations import ArticulationView
 from omni.isaac.sensor import Camera
 from omni.isaac.sensor import LidarRtx
-# from RL_Bot_Control import RLBotController
+import omni.kit.commands
+import omni.replicator.core as rep
 
+import asyncio
+from pxr import Gf
 import numpy as np
 import random
 
 # Nova Carter In our Case
 class RLBot():
-    def __init__(self, world, simulation_app, assets_root_path):
+    def __init__(self, simulation_app, world, timeline, assets_root_path):
 
         self.kit = simulation_app
         self.world = world
+        self.timeline = timeline
         self.assets_root_path = assets_root_path
 
         self.rl_bot_asset_path = self.assets_root_path + "/Isaac/Robots/Carter/nova_carter_sensors.usd"
@@ -44,19 +48,57 @@ class RLBot():
         self.world.initialize_physics()
 
         # CARTER LiDAR
-        self.rl_bot_lidar = self.world.scene.add(
-            LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
-                    name="Carter_Lidar"))
-        print(f"RL_Bot LiDAR : {self.rl_bot_lidar}")
-        print("performing reset")
-        self.world.reset()
-        print("reset done")
-        self.rl_bot_lidar.add_range_data_to_frame()
-        self.rl_bot_lidar.add_point_cloud_data_to_frame()
-        self.rl_bot_lidar.enable_visualization()
-        print("RL Bot Initialized!")
-        # Bot Parameters
+        # self.rl_bot_lidar = self.world.scene.add(
+        #     LidarRtx(prim_path="/World/Nova_Carter/chassis_link/front_RPLidar/RPLIDAR_S2E", 
+        #             name="Carter_Lidar"))
+        # print(f"RL_Bot LiDAR : {self.rl_bot_lidar}")
+        # print("performing reset")
+        # self.world.reset()
+        # print("reset done")
+        # self.rl_bot_lidar.add_range_data_to_frame()
+        # self.rl_bot_lidar.add_point_cloud_data_to_frame()
+        # self.rl_bot_lidar.enable_visualization()
+        # print("RL Bot Initialized!")
+        # # Bot Parameters
+
+        # lidar_config = "RPLIDAR_S2E_Soc_Nav"
+        lidar_config = "Soc_Lidar"
+
+        # 1. Create The Camera
+        _, self.rl_bot_lidar = omni.kit.commands.execute(
+            "IsaacSensorCreateRtxLidar",
+            path="/RPLIDAR_S2E",
+            parent="/World/Nova_Carter/chassis_link/XT_32/RPLIDAR_Req",
+            config=lidar_config,
+            translation=(0, 0, 0.0),
+            orientation=Gf.Quatd(1,0,0,0),
+        )
+        render_product = rep.create.render_product(self.rl_bot_lidar.GetPath(), [1, 1])
+
+        self.rl_bot_lidar.annotator = rep.AnnotatorRegistry.get_annotator("RtxSensorCpuIsaacCreateRTXLidarScanBuffer")
+        self.rl_bot_lidar.annotator.attach(render_product)
+
+        writer = rep.writers.get("RtxLidarDebugDrawPointCloudBuffer")
+        writer.attach(render_product)
+
         # self.rl_bot.current_state = self.rl_bot.get_world_pose()
+
+    # async def lidar_data(self):
+    #     await rep.orchestrator.step_async()
+    #     self.rl_bot_lidar.data = self.rl_bot_lidar.annotator.get_data()
+    #     # print(f"Lidar Data: {self.rl_bot_lidar.data}")
+    #     print(f"Lidar Data : {self.rl_bot_lidar.data['data']}")
+    #     print(f"Lidar Data Type: {type(self.rl_bot_lidar.data['data'])}")
+    #     print(f"Lidar Data Shape: {self.rl_bot_lidar.data['data'].shape}")
+
+    def lidar_data(self):
+        self.kit.update()
+        self.timeline.pause()
+        rep.orchestrator.step()
+        self.rl_bot_lidar.data = self.rl_bot_lidar.annotator.get_data()
+        self.timeline.play()
+        self.kit.update()
+        return self.rl_bot_lidar.data['data']
 
     def bot_reset(self):
         valid_pos_x = random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200)))))))
