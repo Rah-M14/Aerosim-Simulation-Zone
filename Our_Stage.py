@@ -147,16 +147,16 @@ while kit.is_running():
                 # f.write(str(wr_bot.rl_bot_lidar.get_current_frame()))
                 # f.write('\n')
         # if i:
-        #     rand_val = np.random.uniform(-2,2,1)
-        #     rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
-        #     print(f"Applied Action Values : {rand_val}")
-        #     wr_bot_act.move_bot(vals=rand_val)
-        #     # with open(f'/home/rah_m/Isaac_World_Files/camera_data_{i}.json', 'w') as f:
-        #     #     json.dump(convert_to_serializable(wr_bot.rl_bot_camera.get_current_frame()), f)
-        #     #     f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
-        #     #     f.write('\n')
-        #     # imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
-        #     plt.show()
+            rand_val = np.random.uniform(-2,2,1)
+            rand_val = np.append(rand_val, np.random.uniform(-np.pi, np.pi, 1))
+            print(f"Applied Action Values : {rand_val}")
+            wr_bot_act.move_bot(vals=rand_val)
+            # with open(f'/home/rah_m/Isaac_World_Files/camera_data_{i}.json', 'w') as f:
+            #     json.dump(convert_to_serializable(wr_bot.rl_bot_camera.get_current_frame()), f)
+            #     f.write(str(wr_bot.rl_bot_camera.get_current_frame()))
+            #     f.write('\n')
+            # imgplot = plt.imshow(wr_bot.rl_bot_camera.get_rgba()[:, :, :3])
+            plt.show()
         else:
             # carb.log_warn("PegasusApp Simulation App is closing.")
             print("Simulation Done!")

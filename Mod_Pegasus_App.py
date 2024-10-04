@@ -25,11 +25,11 @@ class CustomArguments:
         self,
         world_number=1,
         min_people=15,
-        max_people=30,
+        max_people=20,
         num_episodes=1,
         max_group_share=0.5,
         max_group_size=3,
-        min_delta=0.4,
+        min_delta=0.35,
         max_delta=0.8,
         offset=0.2,
         output_dir="outputs",
@@ -53,26 +53,6 @@ class CustomArguments:
         self.group_deviation = group_deviation
         self.individual_step_size = individual_step_size
         self.interpolation = interpolation
-
-# class CirclePersonController(PersonController):
-
-#     def __init__(self):
-#         super().__init__()
-
-#         self._radius = 5.0
-#         self.gamma = 0.0
-#         self.gamma_dot = 0.3
-
-#     def update(self, dt: float):
-
-#         # Update the reference position for the person to track
-#         self.gamma += self.gamma_dot * dt
-
-#         # Set the target position for the person to track
-#         self._person.update_target_position(
-#             [self._radius * np.cos(self.gamma), self._radius * np.sin(self.gamma), 0.0]
-#         )
-
 
 class GoTo_Controller(PersonController):
 
@@ -147,10 +127,6 @@ class PegasusApp:
         for asset in people_assets_list:
             asset_list.append(asset)
 
-        """
-            New additions to integrate with previous code.
-        """
-
         self.hotspots_list, self.obstacle_list, self.prims_list = self._read_json(args)
 
         # Generate the initial spawn commands
@@ -167,12 +143,12 @@ class PegasusApp:
         )
         spawn_positions = people_creator.generate_spawns(return_commands=False)
 
-        root_path = "/World/Characters"
-        character_prim_paths = []
-        for char in spawn_positions.items():
-            character_prim_paths.append(root_path + "/" + char[0])
+        # root_path = "/World/Characters"
+        # character_prim_paths = []
+        # for char in spawn_positions.items():
+        #     character_prim_paths.append(root_path + "/" + char[0])
 
-        print("Character Prim Paths: ", character_prim_paths)
+        # print("Character Prim Paths: ", character_prim_paths)
 
         movement_generator = MovementGenerator(
             max_steps=args.max_steps,
@@ -195,19 +171,19 @@ class PegasusApp:
             i += 1
             self.person_list.append(p)
 
-        for char in character_prim_paths:
-            rigid_prim = self.stage.GetPrimAtPath(char)
-            rigid_API = UsdPhysics.RigidBodyAPI.Apply(rigid_prim)
-            rigid_API.CreateKinematicEnabledAttr(True)
+        # for char in character_prim_paths:
+        #     rigid_prim = self.stage.GetPrimAtPath(char)
+        #     rigid_API = UsdPhysics.RigidBodyAPI.Apply(rigid_prim)
+        #     rigid_API.CreateKinematicEnabledAttr(True)
             
-            coll_obj = char + "/Collider_Cylinder"
-            coll_geom = UsdGeom.Cylinder.Define(self.stage, coll_obj)
-            coll_prim = self.stage.GetPrimAtPath(coll_obj)
-            coll_geom.CreateHeightAttr(3.0)
-            coll_geom.CreateRadiusAttr(0.25)
-            coll_API = UsdPhysics.CollisionAPI.Apply(coll_prim)
-            coll_geom.CreatePurposeAttr(UsdGeom.Tokens.guide)
-            coll_API.CreateCollisionEnabledAttr(True)
+        #     coll_obj = char + "/Collider_Cylinder"
+        #     coll_geom = UsdGeom.Cylinder.Define(self.stage, coll_obj)
+        #     coll_prim = self.stage.GetPrimAtPath(coll_obj)
+        #     coll_geom.CreateHeightAttr(3.0)
+        #     coll_geom.CreateRadiusAttr(0.25)
+        #     coll_API = UsdPhysics.CollisionAPI.Apply(coll_prim)
+        #     coll_geom.CreatePurposeAttr(UsdGeom.Tokens.guide)
+        #     coll_API.CreateCollisionEnabledAttr(True)
         # Auxiliar variable for the timeline callback example
         self.stop_sim = False
 
@@ -219,7 +195,6 @@ class PegasusApp:
             data = json.load(f)
 
         world = data["worlds"][world_number]
-        # world_graph = WorldGraph(world) # Not required currently
 
         obstacles = world["obstacles"]
         obstacle_list = [
@@ -242,14 +217,6 @@ class PegasusApp:
         prims_list = [(prim["id"], prim["prim"]) for prim in prims]
 
         return hotspots_list, obstacle_list, prims_list
-
-    # def people_goto(self):
-    #     for i, p in enumerate(self.person_list):
-    #         p.update_target_position([5.0 + i, 4.0 - i, 0.0], 1.0)
-
-    # def people_goto_2(self):
-    #     for i, p in enumerate(self.person_list):
-    #         p.update_target_position([5.0 - i, 4.0 + i, 0.0], 1.0)
 
     def run(self):
         """

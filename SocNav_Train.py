@@ -5,14 +5,14 @@ import torch as th
 
 from Soc_Env import SocEnv
 
-log_dir = "./cnn_policy"
+log_dir = "home/rah_m/Soc_Train_Logs"
 my_env = SocEnv(headless=True)
 
-policy_kwargs = dict(activation_fn=th.nn.Tanh, net_arch=[16, dict(pi=[128, 128, 128], vf=[128, 128, 128])]) # Policy parameters
+policy_kwargs = dict(activation_fn=th.nn.Tanh, net_arch=[16, dict(pi=[128, 128, 128], vf=[128, 128, 128])])
 policy = CnnPolicy
-total_timesteps = 500000
+total_timesteps = 50000000
 
-checkpoint_callback = CheckpointCallback(save_freq=10000, save_path=log_dir, name_prefix="jetbot_policy_checkpoint")
+checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="Soc_Bot_checkpoint")
 model = PPO(
     policy,
     my_env,
@@ -29,7 +29,6 @@ model = PPO(
     gae_lambda=1.0,
     max_grad_norm=0.9,
     vf_coef=0.95,
-    max_grad_norm=10,
     tensorboard_log=log_dir,
 )
 
