@@ -15,8 +15,8 @@ from scipy.spatial.transform import Rotation
 
 import omni.anim.graph.core as ag
 
-from Trajectory_Gen_2.create_people import CreatePeople
-from Trajectory_Gen_2.move_generator import MovementGenerator
+from Traj_Gen.create_people import CreatePeople
+from Traj_Gen.move_generator import MovementGenerator
 
 import json
 
@@ -38,7 +38,7 @@ class CustomArguments:
         individual_step_size=2.0,
         interpolation=100,
     ):
-        self.worlds_file = "./standalone_examples/api/omni.isaac.kit/Trajectory_Gen_2/worlds.json"
+        self.worlds_file = "./standalone_examples/api/omni.isaac.kit/Traj_Gen/worlds.json"
         self.world_number = world_number
         self.min_people = min_people
         self.max_people = max_people

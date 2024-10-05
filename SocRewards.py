@@ -45,8 +45,11 @@ class SocialReward:
 
         # LOGGING
         self.episode_length = 0
-        self.log_dir = log_dir
-        self.setup_logging()
+        self.log_dir = os.path.join(log_dir, "Reward_Logs")
+        self.logger = self.setup_logging()
+        print(f"Logger initialized: {self.logger}")
+        print(f"Logger handlers: {self.logger.handlers}")
+        self.logger.info("This is a test log message from __init__")
 
     def setup_logging(self):
         try:
@@ -54,19 +57,39 @@ class SocialReward:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file = os.path.join(self.log_dir, f"social_reward_{timestamp}.log")
             
+            # Check if we can write to the file
             with open(log_file, 'w') as f:
                 f.write("Initializing log file\n")
             
-            logging.basicConfig(filename=log_file, level=logging.INFO,
-                                format='%(asctime)s - %(levelname)s - %(message)s')
-            self.logger = logging.getLogger(__name__)
-            self.logger.info("Logging initialized successfully")
+            # Create a logger
+            logger = logging.getLogger(__name__)
+            logger.setLevel(logging.INFO)
+            
+            # Create file handler which logs even debug messages
+            fh = logging.FileHandler(log_file)
+            fh.setLevel(logging.INFO)
+            
+            # Create formatter and add it to the handlers
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
+            
+            # Add the handlers to the logger
+            logger.addHandler(fh)
+            
+            logger.info("Logging initialized successfully")
+            return logger
         except Exception as e:
             print(f"Error setting up logging: {e}")
-            logging.basicConfig(level=logging.INFO,
-                                format='%(asctime)s - %(levelname)s - %(message)s')
-            self.logger = logging.getLogger(__name__)
-            self.logger.warning(f"Falling back to console logging due to error: {e}")
+            # Fallback to console logging if file logging fails
+            logger = logging.getLogger(__name__)
+            logger.setLevel(logging.INFO)
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            ch.setFormatter(formatter)
+            logger.addHandler(ch)
+            logger.warning(f"Falling back to console logging due to error: {e}")
+            return logger
 
     def get_total_reward(self):
         self.logger.info(f"Total reward: {self.to_point_rew}")
