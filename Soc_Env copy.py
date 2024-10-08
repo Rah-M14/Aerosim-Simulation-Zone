@@ -390,81 +390,134 @@ def animated_loading():
         sys.stdout.flush()
         time.sleep(0.5)
 
-class WandbCallback(BaseCallback):
-    def __init__(self, verbose=0):
-        super(WandbCallback, self).__init__(verbose)
-        self.step_count = 0
-
-    def _on_step(self) -> bool:
-        self.step_count += 1
-        if self.step_count % 1000 == 0:
-            wandb.log({
-                "total_timesteps": self.num_timesteps,
-                "learning_rate": self.model.learning_rate,
-            })
-            animated_loading()
-        return True
-
 class IncrementalCheckpointCallback(CheckpointCallback):
-    def __init__(self, save_freq, save_path, name_prefix="rl_model", verbose=0):
+    def __init__(self, algo, save_freq, save_path, name_prefix="rl_model", verbose=0):
         super().__init__(save_freq, save_path, name_prefix, verbose)
+        self.algo = algo.upper()
         self.run_number = self.get_next_run_number(save_path)
-        self.save_path = os.path.join(save_path, f"PPO_{self.run_number}_ckpts")
+        self.save_path = os.path.join(save_path, f"{self.algo}_{self.run_number}_ckpts")
         os.makedirs(self.save_path, exist_ok=True)
 
     def get_next_run_number(self, base_path):
-        existing_runs = [d for d in os.listdir(base_path) if d.startswith("PPO_") and d.endswith("_ckpts")]
+        existing_runs = [d for d in os.listdir(base_path) if d.startswith(f"{self.algo}_") and d.endswith("_ckpts")]
         if not existing_runs:
             return 1
         run_numbers = [int(d.split("_")[1]) for d in existing_runs]
         return max(run_numbers) + 1
     
+class WandbCallback(BaseCallback):
+    def __init__(self, algo, verbose=0):
+        super(WandbCallback, self).__init__(verbose)
+        self.step_count = 0
+        self.algo = algo
+
+    def _on_step(self) -> bool:
+        self.step_count += 1
+        if self.step_count % 1000 == 0:
+            log_data = {
+                "total_timesteps": self.num_timesteps,
+                "learning_rate": self.model.learning_rate,
+            }
+            wandb.log(log_data)
+            animated_loading()
+        return True
+    
 if __name__ == '__main__':
 
-    wandb.init(project="social_navigation", name="training")    
-    log_dir = "/home/rah_m/SocNav_Logs"
-    ckpt_log_dir = "/home/rah_m/SocNav_Logs/Checkpoints"
-    tensor_log_dir = "/home/rah_m/SocNav_Logs/Tensorboard"
-    if not os.path.exists(ckpt_log_dir):
-        os.makedirs(ckpt_log_dir)
+    parser = argparse.ArgumentParser(description="Let's Train our Omni Isaac SocNav Agent!")
+    parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use (ppo or sac)')
+    args = parser.parse_args()
+
+    wandb.init(project="social_navigation", name=f"{args.algo.upper()}_training")    
+
+    log_dir = "/home/rah_m/Curr_SocNav_Logs"
+    ckpt_log_dir = "/home/rah_m/Curr_SocNav_Logs/Checkpoints"
+    tensor_log_dir = "/home/rah_m/Curr_SocNav_Logs/Tensorboard"
+
+    os.makedirs(ckpt_log_dir, exist_ok=True)
+
     my_env = SocEnv(headless=True, logdir=log_dir)
 
-    input_dim = my_env.observation_space.shape[0]
-    policy_kwargs = dict(
-        activation_fn=th.nn.Tanh,
-        net_arch=[
-            dict(pi=[128, 128, 128], vf=[128, 128, 128])
-        ]
-    )
+    best_checkpoint = get_best_checkpoint(args.algo, ckpt_log_dir)
+    latest_checkpoint = get_latest_checkpoint(args.algo, ckpt_log_dir)
+    checkpoint_to_load = best_checkpoint or latest_checkpoint
 
-    policy = MlpPolicy
-    total_timesteps = 50000000
-
-    with wandb.init(project="social_navigation", name="training") as run:
-        model = PPO(
-            policy,
-            my_env,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            n_steps=2560,
-            batch_size=64,
-            learning_rate=0.000125,
-            gamma=0.97,
-            ent_coef=7.5e-08,
-            clip_range=0.3,
-            n_epochs=5,
-            device="cuda",
-            gae_lambda=1.0,
-            max_grad_norm=0.9,
-            vf_coef=0.95,
-            tensorboard_log=tensor_log_dir
+    # input_dim = my_env.observation_space.shape[0]
+    if args.algo.lower() == 'ppo':
+        policy_kwargs = dict(
+            activation_fn=th.nn.Tanh,
+            net_arch=[
+                dict(pi=[128, 128, 128], vf=[128, 128, 128])
+            ]
+        )
+    elif args.algo.lower() == 'sac':
+        policy_kwargs = dict(
+            net_arch=dict(pi=[256, 256, 256], qf=[256, 256, 256]),
+            activation_fn=th.nn.ReLU,
+            use_sde=False,
+            log_std_init=-3,
         )
 
-        checkpoint_callback = IncrementalCheckpointCallback(save_freq=5000, save_path=ckpt_log_dir, name_prefix="SocNav_ckpt")
-        wandb_callback = WandbCallback()
-        model.learn(total_timesteps=total_timesteps, callback=[checkpoint_callback, wandb_callback])
-    
-    print("\nTraining completed!")
-    model.save(os.path.join(ckpt_log_dir, f"PPO_{checkpoint_callback.run_number}_final", "Soc_Nav_Policy"))
+    total_timesteps = 50000000
+
+    with wandb.init(project="social_navigation", name=f"{args.algo.upper()}_training") as run:
+        if args.algo.lower() == 'ppo':
+            model = PPO(
+                PPOMlpPolicy,
+                my_env,
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                n_steps=2560,
+                batch_size=64,
+                learning_rate=0.000125,
+                gamma=0.97,
+                ent_coef=7.5e-08,
+                clip_range=0.3,
+                n_epochs=5,
+                device="cuda",
+                gae_lambda=1.0,
+                max_grad_norm=0.9,
+                vf_coef=0.95,
+                tensorboard_log=tensor_log_dir
+            )
+        elif args.algo.lower() == 'sac':
+            model = SAC(
+                SACMlpPolicy,
+                my_env,
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                buffer_size=1000000,
+                learning_rate=3e-4,
+                gamma=0.99,
+                batch_size=256,
+                tau=0.005,
+                ent_coef='auto',
+                target_update_interval=1,
+                train_freq=1,
+                gradient_steps=1,
+                learning_starts=10000,
+                use_sde=False,
+                sde_sample_freq=-1,
+                use_sde_at_warmup=False,
+                tensorboard_log=tensor_log_dir,
+                device="cuda"
+            )
+
+        if checkpoint_to_load:
+            print(f"Loading checkpoint: {checkpoint_to_load}")
+            model = model.load(checkpoint_to_load, env=my_env)
+
+    checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=5000, save_path=ckpt_log_dir, 
+                                                        name_prefix=f"SocNav_{args.algo.upper()}_ckpt")
+    wandb_callback = WandbCallback(algo=args.algo)
+    best_model_callback = BestModelCallback(algo=args.algo, save_path=os.path.join(ckpt_log_dir, f"{args.algo.upper()}_{checkpoint_callback.run_number}_ckpts"))
+
+    model.learn(total_timesteps=total_timesteps, callback=[checkpoint_callback, wandb_callback, best_model_callback])
+
+    # Save the final model
+    final_model_path = os.path.join(ckpt_log_dir, f"{args.algo.upper()}_{checkpoint_callback.run_number}_final", f"Soc_Nav_{args.algo.upper()}_Policy")
+    model.save(final_model_path)
+    print(f"\nTraining completed! Final model saved to {final_model_path}")
+
     wandb.finish()
     my_env.close()
