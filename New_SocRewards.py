@@ -16,6 +16,8 @@ class SocialReward:
         self.to_goal_rew = 0
         self.close_to_goal_rew = 0
         self.cosine_sim_rew = 0
+        self.to_goal_factor = 10
+        self.cosine_sim_factor = 10
 
         # SOCIAL REWARD PARAMS
         self.close_coll_rew = 0
@@ -25,9 +27,9 @@ class SocialReward:
         self.live_reward = -1
 
         # SOCIAL THRESHOLDS & WEIGHTS
-        self.coll_dist_threshold = 0.05
-        self.coll_threshold = 0.02
-        self.coll_exp_rew_scale = 0.05
+        self.coll_dist_threshold = 0
+        self.coll_threshold = 0
+        self.coll_exp_rew_scale = 0
         self.collision_penalty = 0
         self.min_cluster_size = 3
         self.cluster_eps = 0.5
@@ -42,8 +44,16 @@ class SocialReward:
         # GOAL & TERMINAL REWARDS & THRESHOLDS
         self.timeout_penalty = -10000
         self.goal_reward = 1000000
-        self.goal_dist_thresold = 0.3
-        self.cosine_sim_factor = 10
+        self.goal_dist_threshold = 0.5
+
+        # CURRICULUM REWARDS
+        self.curriculum_level = 1
+        self.level_rewards = {
+            1: {"goal": 1000000, "step": -0.1},
+            2: {"goal": 1000000, "step": -0.2},
+            3: {"goal": 1000000, "step": -0.3},
+            4: {"goal": 1000000, "step": -0.5}
+        }
 
         # LOGGING
         self.episode_length = 0
@@ -122,8 +132,8 @@ class SocialReward:
         self.close_coll_rew = self.close_collision_reward(lidar_data)
         self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
 
-        self.current_rew = (
-            self.to_goal_rew + self.close_to_goal_rew + self.cosine_sim_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
+        self.current_rew = (self.to_goal_rew + self.close_to_goal_rew + self.cosine_sim_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
+        self.current_rew += self.level_rewards[self.curriculum_level]["step"]
 
         reward_dict.update({
             'to_goal_rew': self.to_goal_rew,
@@ -162,15 +172,15 @@ class SocialReward:
     def towards_goal_reward(self, prev_bot_pos, cur_bot_pos, goal_pos):
         prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
         cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-        self.to_goal_rew = prev_dist_to_goal - cur_dist_to_goal
-        if self.to_goal_rew < 0:
-            self.to_goal_rew = -1
+        self.to_goal_rew = self.to_goal_factor * (prev_dist_to_goal - cur_dist_to_goal)
+        if self.to_goal_rew <= 0.2 :
+            self.to_goal_rew = -2
         return self.to_goal_rew
     
     def close_to_goal_reward(self, cur_bot_pos, goal_pos):
         dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-        if dist_to_goal < self.goal_dist_thresold:
-            self.close_to_goal_rew = self.goal_reward
+        if dist_to_goal < self.goal_dist_threshold:
+            self.close_to_goal_rew = self.level_rewards[self.curriculum_level]["goal"]
             return self.close_to_goal_rew
         return 0
     
@@ -181,6 +191,26 @@ class SocialReward:
         if self.cosine_sim_rew < 0:
             self.cosine_sim_rew = -1
         return self.cosine_sim_rew
+    
+    # PATH CHECKS
+    def check_goal_reached(self, cur_bot_pos, goal_pos):
+        dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+        goal_reached = dist_to_goal < self.goal_dist_threshold
+        if goal_reached:
+            self.logger.info(f"Goal reached. Distance to goal: {dist_to_goal:.2f}")
+        return goal_reached
+    
+    def check_boundary_collision(self, cur_bot_pos):
+        x, y = cur_bot_pos
+        x_min, x_max = self.x_limits
+        y_min, y_max = self.y_limits
+
+        x_collision = x < x_min + self.boundary_threshold or x > x_max - self.boundary_threshold
+        y_collision = y < y_min + self.boundary_threshold or y > y_max - self.boundary_threshold
+
+        if x_collision or y_collision:
+            self.logger.info(f"Boundary collision detected. Bot position: {cur_bot_pos}")
+        return x_collision or y_collision
 
 
     # SOCIAL REWARDS
@@ -281,3 +311,9 @@ class SocialReward:
     def end_episode(self, ep_count):
         self.log_episode_rewards(ep_count)
         self.reset_episode_rewards()
+
+    # CURRICULUM UPDATE
+    def update_curriculum_level(self, level):
+        self.curriculum_level = level
+        self.logger.info(f"Reward system updated to curriculum level {self.curriculum_level}")
+        wandb.log({"reward_curriculum_level": self.curriculum_level})
