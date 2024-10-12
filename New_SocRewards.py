@@ -7,7 +7,7 @@ from datetime import datetime
 
 class SocialReward:
     def __init__(self, log_dir):
-        self.ep_reward_dict = {'ep_to_goal_rew': 0, 'ep_close_to_goal_rew': 0, 'ep_cosine_sim_rew': 0, 'ep_close_coll_rew': 0, 'ep_collision_rew': 0, 'ep_boundary_coll_rew': 0, 'ep_current_rew': 0}
+        self.ep_reward_dict = {'ep_close_to_goal_rew': 0, 'ep_cosine_sim_rew': 0, 'ep_dist_to_goal_rew': 0, 'ep_close_coll_rew': 0, 'ep_collision_rew': 0, 'ep_boundary_coll_rew': 0, 'ep_current_rew': 0}
 
         self.current_rew = 0
         self.ep_reward_to_point = 0
@@ -16,8 +16,10 @@ class SocialReward:
         self.to_goal_rew = 0
         self.close_to_goal_rew = 0
         self.cosine_sim_rew = 0
-        self.to_goal_factor = 10
-        self.cosine_sim_factor = 10
+        self.dist_to_goal_rew = 0
+        self.to_goal_factor = 50
+        self.cosine_sim_factor = 500
+        self.dist_goal_factor = 0.5
 
         # SOCIAL REWARD PARAMS
         self.close_coll_rew = 0
@@ -43,8 +45,10 @@ class SocialReward:
 
         # GOAL & TERMINAL REWARDS & THRESHOLDS
         self.timeout_penalty = -10000
-        self.goal_reward = 1000000
-        self.goal_dist_threshold = 0.5
+        self.goal_reward = 10000
+        self.goal_dist_threshold = 2
+        self.close_goal_dist_threshold = 0.5
+
 
         # CURRICULUM REWARDS
         self.curriculum_level = 1
@@ -109,9 +113,10 @@ class SocialReward:
 
     def reset_episode_rewards(self):
         self.ep_reward_dict = {
-            'ep_to_goal_rew': 0,
+            # 'ep_to_goal_rew': 0,
             'ep_close_to_goal_rew': 0,
             'ep_cosine_sim_rew': 0,
+            'ep_dist_to_goal_rew': 0,
             'ep_close_coll_rew': 0,
             'ep_collision_rew': 0,
             'ep_current_rew': 0
@@ -122,27 +127,32 @@ class SocialReward:
 
     # TOTAL REWARD COMPUTATION
     def compute_reward(self, prev_bot_pos, cur_bot_pos, goal_pos, lidar_data=None):
-        reward_dict = {'to_goal_rew': 0, 'close_to_goal_rew': 0, 'cosine_sim_rew': 0, 'close_coll_rew': 0, 'collision_rew': 0, 'current_rew': 0}
+        reward_dict = {'close_to_goal_rew': 0, 'cosine_sim_rew': 0, 'dist_to_goal_rew': 0, 'close_coll_rew': 0, 'collision_rew': 0, 'current_rew': 0}
         self.episode_length += 1
 
-        self.to_goal_rew = self.towards_goal_reward(prev_bot_pos, cur_bot_pos, goal_pos)
+        # self.to_goal_rew = self.towards_goal_reward(prev_bot_pos, cur_bot_pos, goal_pos)
         self.close_to_goal_rew = self.close_to_goal_reward(cur_bot_pos, goal_pos)
+        # done, self.close_to_goal_rew = self.check_goal_reached(cur_bot_pos, goal_pos)
         self.cosine_sim_rew = self.cosine_similarity_reward(prev_bot_pos, cur_bot_pos, goal_pos)
+        self.dist_to_goal_rew = self.dist_to_goal(cur_bot_pos, goal_pos)
 
         self.close_coll_rew = self.close_collision_reward(lidar_data)
         self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
 
-        self.current_rew = (self.to_goal_rew + self.close_to_goal_rew + self.cosine_sim_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
+        self.current_rew = (self.close_to_goal_rew + self.cosine_sim_rew + self.dist_to_goal_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
         self.current_rew += self.level_rewards[self.curriculum_level]["step"]
 
         reward_dict.update({
-            'to_goal_rew': self.to_goal_rew,
+            # 'to_goal_rew': self.to_goal_rew,
             'close_to_goal_rew': self.close_to_goal_rew,
             'cosine_sim_rew': self.cosine_sim_rew,
+            'dist_to_goal_rew': self.dist_to_goal_rew,
             'close_coll_rew': self.close_coll_rew,
             'collision_rew': self.collision_rew,
             'current_rew': self.current_rew
         })
+        
+        reward_dict.update({'current_rew': self.current_rew})
 
         if self.collision_rew != 0:
             self.logger.info(f"Collision detected. Penalty: {self.collision_rew}")
@@ -156,9 +166,10 @@ class SocialReward:
         return self.current_rew, self.to_point_rew, reward_dict, self.ep_reward_dict
     
     def _update_reward(self, reward_dict):
-        self.ep_reward_dict['ep_to_goal_rew'] += reward_dict['to_goal_rew']
+        # self.ep_reward_dict['ep_to_goal_rew'] += reward_dict['to_goal_rew']
         self.ep_reward_dict['ep_close_to_goal_rew'] += reward_dict['close_to_goal_rew']
         self.ep_reward_dict['ep_cosine_sim_rew'] += reward_dict['cosine_sim_rew']
+        self.ep_reward_dict['ep_dist_to_goal_rew'] += reward_dict['dist_to_goal_rew']
         self.ep_reward_dict['ep_close_coll_rew'] += reward_dict['close_coll_rew']
         self.ep_reward_dict['ep_collision_rew'] += reward_dict['collision_rew']
         self.ep_reward_dict['ep_current_rew'] += reward_dict['current_rew']
@@ -169,49 +180,48 @@ class SocialReward:
 
 
     # PATH REWARDS
-    def towards_goal_reward(self, prev_bot_pos, cur_bot_pos, goal_pos):
-        prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
-        cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-        self.to_goal_rew = self.to_goal_factor * (prev_dist_to_goal - cur_dist_to_goal)
-        if self.to_goal_rew <= 0.2 :
-            self.to_goal_rew = -2
-        return self.to_goal_rew
+    # def towards_goal_reward(self, prev_bot_pos, cur_bot_pos, goal_pos):
+    #     prev_dist_to_goal = np.linalg.norm(goal_pos - prev_bot_pos)
+    #     cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+    #     self.to_goal_rew = self.to_goal_factor * (prev_dist_to_goal - cur_dist_to_goal)
+    #     if self.to_goal_rew <= 0.2 :
+    #         self.to_goal_rew = -2
+    #     return self.to_goal_rew
     
     def close_to_goal_reward(self, cur_bot_pos, goal_pos):
         dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-        if dist_to_goal < self.goal_dist_threshold:
+        if dist_to_goal < self.close_goal_dist_threshold:
             self.close_to_goal_rew = self.level_rewards[self.curriculum_level]["goal"]
             return self.close_to_goal_rew
         return 0
+
+    def dist_to_goal(self, cur_bot_pos, goal_pos):
+        parabloic_factor = 10
+        log_factor = 2
+        log_scaling_factor = 100
+
+        cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+        if cur_dist_to_goal < self.goal_dist_threshold:
+            self.dist_to_goal_rew = np.log(cur_dist_to_goal*log_factor)*log_scaling_factor
+        else:
+            self.dist_to_goal_rew = np.log(cur_dist_to_goal*log_factor)*log_scaling_factor - parabloic_factor*(cur_dist_to_goal**2)
+        self.dist_to_goal_rew = -np.log(cur_dist_to_goal*100)
+        return self.dist_to_goal_rew
     
     def cosine_similarity_reward(self, prev_bot_pos, cur_bot_pos, goal_pos):
         bot_vec = cur_bot_pos - prev_bot_pos
         bot_goal_vec = goal_pos - prev_bot_pos
-        self.cosine_sim_rew = self.cosine_sim_factor * np.dot(bot_vec, bot_goal_vec) / (np.linalg.norm(bot_vec) * np.linalg.norm(bot_goal_vec))
-        if self.cosine_sim_rew < 0:
-            self.cosine_sim_rew = -1
+        self.cosine_sim_rew = self.cosine_sim_factor * (np.dot(bot_vec, bot_goal_vec) / (np.linalg.norm(bot_vec) * np.linalg.norm(bot_goal_vec)))
         return self.cosine_sim_rew
     
     # PATH CHECKS
     def check_goal_reached(self, cur_bot_pos, goal_pos):
         dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
-        goal_reached = dist_to_goal < self.goal_dist_threshold
-        if goal_reached:
-            self.logger.info(f"Goal reached. Distance to goal: {dist_to_goal:.2f}")
+        goal_reached = dist_to_goal < self.close_goal_dist_threshold
+        # if goal_reached:
+        #     self.close_to_goal_rew = self.level_rewards[self.curriculum_level]["goal"]
+        #     self.logger.info(f"Goal reached. Distance to goal: {dist_to_goal:.2f}")
         return goal_reached
-    
-    def check_boundary_collision(self, cur_bot_pos):
-        x, y = cur_bot_pos
-        x_min, x_max = self.x_limits
-        y_min, y_max = self.y_limits
-
-        x_collision = x < x_min + self.boundary_threshold or x > x_max - self.boundary_threshold
-        y_collision = y < y_min + self.boundary_threshold or y > y_max - self.boundary_threshold
-
-        if x_collision or y_collision:
-            self.logger.info(f"Boundary collision detected. Bot position: {cur_bot_pos}")
-        return x_collision or y_collision
-
 
     # SOCIAL REWARDS
     def close_collision_reward(self, lidar_data):
@@ -295,9 +305,14 @@ class SocialReward:
         y_min, y_max = self.y_limits
 
         x_collision = abs(x - x_min) < self.boundary_threshold or abs(x - x_max) < self.boundary_threshold
+        # print(f"X collision: {x_collision}, x_min_coll : {abs(x - x_min)}, x_max_coll : {abs(x - x_max)}")
         y_collision = abs(y - y_min) < self.boundary_threshold or abs(y - y_max) < self.boundary_threshold
+        # print(f"Y collision: {y_collision}, y_min_coll : {abs(y - y_min)}, y_max_coll : {abs(y - y_max)}")
 
-        return x_collision or y_collision
+        x_out = x < x_min or x > x_max
+        y_out = y < y_min or y > y_max
+
+        return x_collision or y_collision or x_out or y_out
     
     def log_episode_rewards(self, ep_count):
         if ep_count > 0 and self.episode_length > 0:
