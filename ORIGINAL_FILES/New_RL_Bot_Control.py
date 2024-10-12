@@ -87,7 +87,7 @@ class RLBotController(BaseController):
 #         return ArticulationAction(joint_velocities=joint_velocities)
 
 class RLBotAct():
-    def __init__(self, bot, controller, n_steps=1):
+    def __init__(self, bot, controller, n_steps=6):
         self.bot = bot
         self.controller = controller
         self.n_steps = n_steps

@@ -6,7 +6,6 @@ import time
 import shutil
 from datetime import datetime
 import carb
-import json
 import logging
 import wandb
 
@@ -17,7 +16,6 @@ from stable_baselines3.sac import MultiInputPolicy as SACMultiPolicy
 from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-
 import torch as th
 import torch.nn as nn
 
@@ -25,13 +23,14 @@ import gym
 from gym import spaces
 import numpy as np
 
+# from Soc_Env import SocEnv
+
 class SocEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
     
     def __init__(
         self,
         algo,
-        botname,
         headless,
         state_normalize,
         logdir,
@@ -66,7 +65,10 @@ class SocEnv(gym.Env):
         # from gymnasium import spaces
         import torch
         import random
-        from collections import deque
+
+        from pxr import Usd, UsdPhysics, UsdGeom, Vt, Gf, Sdf
+
+        import asyncio
         from stable_baselines3 import PPO
 
         from omni.isaac.core import World, SimulationContext
@@ -112,9 +114,9 @@ class SocEnv(gym.Env):
         # import omni.anim.navigation.core as nav
         self.kit.update()
 
-        from New_RL_Bot_Control import RLBotController, RLBotAct
-        from New_RL_Bot import RLBot
-        from New_SocRewards import SocialReward
+        from RL_Bot_Control import RLBotController, RLBotAct
+        from RL_Bot import RLBot
+        from SocRewards import SocialReward
         from Mod_Pegasus_App import PegasusApp
 
         self.assets_root_path = get_assets_root_path()
@@ -134,7 +136,7 @@ class SocEnv(gym.Env):
         if result:
             omni.usd.get_context().open_stage(usd_path)
             self.stage = omni.usd.get_context().get_stage()
-            # self.scene = UsdPhysics.Scene.Define(self.stage, "/physicsScene")
+            self.scene = UsdPhysics.Scene.Define(self.stage, "/physicsScene")
         else:
             carb.log_error(
                 f"the usd path {usd_path} could not be opened, please make sure that {current_world_usd} is a valid usd file in {self.assets_root_path}"
@@ -156,10 +158,9 @@ class SocEnv(gym.Env):
         #print("Waiting Room with Physics initialization in the World!")
 
         enable_extension("omni.isaac.debug_draw")
-
-        self.botname = botname
-        self.bot = RLBot(simulation_app=self.kit, world=self.world, timeline=self.timeline, assets_root_path=self.assets_root_path, botname=self.botname)
-        self.controller = RLBotController(botname=self.botname)
+    
+        self.bot = RLBot(simulation_app=self.kit, world=self.world, timeline=self.timeline, assets_root_path=self.assets_root_path, botname="jackal")
+        self.controller = RLBotController()
         self.act = RLBotAct(self.bot.rl_bot, self.controller, n_steps=5)
         print("Bot Initialised!")
         inav = omni.anim.navigation.core.acquire_interface()
@@ -181,23 +182,17 @@ class SocEnv(gym.Env):
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
         self.max_velocity = 1.0
-        self.max_angular_velocity = np.pi * 5.0
+        self.max_angular_velocity = np.pi
 
         # RL PARAMETERS
         self.seed(seed)
-
-        mlp_zeros = [np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(2), np.zeros(2)]
-        self.mlp_context_frame_length = 10
-        self.img_context_frame_length = 5
-        self.mlp_context_frame = deque([mlp_zeros for _ in range(self.mlp_context_frame_length)], maxlen=self.mlp_context_frame_length)
-        self.img_context_frame = deque([np.zeros((3, 128, 128)) for _ in range(self.img_context_frame_length)], maxlen=self.img_context_frame_length)
-        
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
-        self.action_space = spaces.Box(low=np.array([-1, -1]), high=np.array([5, 1]), shape=(2,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        # self.observation_space = spaces.Box(low=float("inf"), high=float("inf"), shape=(16,), dtype=np.float32)
         self.observation_space = spaces.Dict({
-            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 12), dtype=np.float32),
-            'image': spaces.Box(low=0, high=255, shape=(self.img_context_frame_length, 3, 128, 128), dtype=np.float32),
+            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(12,), dtype=np.float32),
+            'image': spaces.Box(low=0, high=255, shape=(128, 128), dtype=np.uint8),
             # 'camera_data': spaces.Box(low=0, high=255, shape=(255, 255, 3), dtype=np.uint8)
         })
 
@@ -211,23 +206,14 @@ class SocEnv(gym.Env):
         self.env_log_dir = os.path.join(self.logdir, "Env_Logs")
         self.logger = self.setup_logging()
         print(f"Logger initialized: {self.logger}")
-        # print(f"Logger handlers: {self.logger.handlers}")
+        print(f"Logger handlers: {self.logger.handlers}")
         self.logger.info("This is a test log message from __init__")
 
         # REWARD PARAMETERS
         self.reward_manager = SocialReward(self.logdir)
         self.max_episode_length = max_episode_length
 
-        # CURRICULUM APPROACH PARAMETERS5, -np.pi
-        self.curriculum_level = 1
-        self.level_thresholds = {1: 3.0, 2: 7.0, 3: 11.0, 4: float('inf')}
-        self.level_success_rate = {1: 0, 2: 0, 3: 0, 4: 0}
-        self.level_episodes = {1: 0, 2: 0, 3: 0, 4: 0}
-        self.success_threshold = 0.85
-        self.episodes_per_level = 100
-        self.reward_manager.update_curriculum_level(self.curriculum_level)
-
-        # wandb.init(project="SocNav_Omni", name="environment_logging")
+        wandb.init(project="SocNav_Omni", name="environment_logging")
 
     def setup_logging(self):
         try:
@@ -276,23 +262,13 @@ class SocEnv(gym.Env):
         self.kit.update()
         self.bot.bot_reset()
         self.world.reset(True)
-
         self.bot.rl_bot.start_pose = self.bot.rl_bot.get_world_pose()
-        print(f"Start pose : {self.bot.rl_bot.start_pose}")
-        # self.bot.rl_bot.goal_pose = np.array([1.0, -4.0, 0.0])
         self.bot.rl_bot.goal_pose = self._gen_goal_pose()
         print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
-
-        state_goal_dist = np.linalg.norm(self.bot.rl_bot.goal_pose[:2] - self.bot.rl_bot.start_pose[0][:2])
-
-        # print(f"Start pose : {self.bot.rl_bot.start_pose[0][:2]}")
-        # print(f"Goal Pose: {self.bot.rl_bot.goal_pose[:2]}")
-        # print(f"State to goal Diist : {state_goal_dist}")
-        print(f"Current curriculum level: {self.curriculum_level}")
         self.kit.update()
 
-        observations, _, _ = self.get_observations()
-        # observations['vector'] = np.concatenate(observations['vector'])
+        observations, _ = self.get_observations()
+        observations['vector'] = np.concatenate(observations['vector'])
         self.ep_steps = 0
 
         self.logger.info(f"Episode {self.episode_count} started")
@@ -318,33 +294,13 @@ class SocEnv(gym.Env):
                                 bot_ang_vel[:2],
                                 goal_world_pos[:2]]
             
-        self.mlp_context_frame.append(mlp_states)
-        mlp_combined_context = self.get_mlp_combined_context()
-        
         lidar_data = self.bot.get_denoised_lidar_data()
         if lidar_data.size == 0:
             lidar_data = None
-            lidar_image = np.zeros((3, 128, 128))
-            img_combined_context = th.zeros((self.img_context_frame_length, 3, 128, 128))
         else:
             lidar_image = self.get_lidar_image(lidar_data, mlp_states)
-            self.img_context_frame.append(lidar_image)
-            img_combined_context = self.get_img_combined_context()
-            # print(f"img comb shape : {img_combined_context.shape}")
 
-        return {'vector': mlp_combined_context, 'image': img_combined_context}, lidar_data, mlp_states
-    
-    def get_mlp_combined_context(self):
-        total_context = []
-        for context in self.mlp_context_frame:
-            total_context.append(np.concatenate(context))
-        return th.tensor(np.array(total_context, dtype=np.float32))
-
-    def get_img_combined_context(self):
-        total_context = []
-        for context in self.img_context_frame:
-            total_context.append(context)
-        return th.tensor(np.array(total_context, dtype=np.float32))
+        return {'vector': mlp_states, 'image': lidar_image}, lidar_data
     
     def de_normalize_states(self, observation):
         return [observation[0] * self.world_limits,
@@ -362,11 +318,14 @@ class SocEnv(gym.Env):
             self.world.step(render=False)
             self.ep_steps += 1
 
-        observations, lidar_data, mlp_obs = self.get_observations()
-        # observations['vector'] = np.concatenate(observations['vector'])
+        observations, lidar_data = self.get_observations()
+        mlp_obs = observations['vector']
+        observations['vector'] = np.concatenate(observations['vector'])
 
         if self.state_normalize == True:
             mlp_obs = self.de_normalize_states(mlp_obs)
+
+        # print(f"mlp_obs : {mlp_obs}")
         
         self.info = {}
         
@@ -374,18 +333,18 @@ class SocEnv(gym.Env):
         self.info['lidar_data'] = lidar_data
         self.info['camera_data'] = camera_data
 
-        reward, to_point_rew, reward_dict, ep_rew_dict = self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-1], lidar_data)
         done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[-1])
-        if done:
-            if done_reason == "timeout":
-                reward = self.reward_manager.timeout_penalty
-                to_point_rew = 0
-            elif done_reason == "boundary_collision":
-                reward += self.reward_manager.boundary_coll_penalty
-                to_point_rew = 0
-            elif done_reason == 'goal_reached':
-                self.update_curriculum(done_reason == "goal_reached")
-                print("Goal Reached!!!!")
+        if done == True and done_reason == "timeout":
+            reward = self.reward_manager.timeout_penalty
+            to_point_rew = 0
+        elif done == True and done_reason == "goal_reached":
+            reward = self.reward_manager.goal_reward
+            to_point_rew = 0
+        elif done == True and done_reason == "boundary_collision":
+            reward = self.reward_manager.boundary_coll_penalty
+            to_point_rew = 0
+        else:
+            reward, to_point_rew, reward_dict, ep_rew_dict = self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-1], lidar_data)
 
         self.logger.info(f"Step: action={action}, reward={reward}, done={done}")
         wandb.log({
@@ -402,57 +361,20 @@ class SocEnv(gym.Env):
         if self.ep_steps >= self.max_episode_length:
             self.logger.info("Episode timed out")
             return True, "timeout"
-        if self.reward_manager.check_goal_reached(cur_bot_pos, goal_pos):
+        if np.linalg.norm(goal_pos - cur_bot_pos) < self.reward_manager.goal_dist_thresold:
             self.logger.info("Goal reached")
             return True, "goal_reached"
         if self.reward_manager.check_boundary_collision(cur_bot_pos):
             self.logger.info("Boundary collision detected")
             return True, "boundary_collision"
         return False, None
-    
-    def update_curriculum(self, success):
-        self.level_episodes[self.curriculum_level] += 1
-        if success:
-            self.level_success_rate[self.curriculum_level] += 1
 
-        if self.level_episodes[self.curriculum_level] >= self.episodes_per_level:
-            success_rate = self.level_success_rate[self.curriculum_level] / self.level_episodes[self.curriculum_level]
-            if success_rate >= self.success_threshold and self.curriculum_level < 4:
-                self.curriculum_level += 1
-                self.reward_manager.update_curriculum_level(self.curriculum_level)
-                print(f"Curriculum being updated to : {self.curriculum_level}")
-                self.logger.info(f"Moving to curriculum level {self.curriculum_level}")
-                wandb.log({"curriculum_level": self.curriculum_level})
-            
-            self.level_success_rate[self.curriculum_level] = 0
-            self.level_episodes[self.curriculum_level] = 0
-
-    # CURRICULUM GOAL POSE GENERATION
     def _gen_goal_pose(self):
         import random
-        max_attempts = 100 
-        for _ in range(max_attempts):
-            new_pos = np.array([random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
-                                random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
-                                0.0])
-            
-            if np.linalg.norm(new_pos[:2] - self.bot.rl_bot.start_pose[0][:2]) <= self.level_thresholds[self.curriculum_level]:
-                return new_pos
-        
-        direction = (np.random.rand(2) - 0.5) * 2
-        direction /= np.linalg.norm(direction)
-        return np.array([
-            self.bot.rl_bot.start_pose[0][0] + (direction[0] * self.level_thresholds[self.curriculum_level]),
-            self.bot.rl_bot.start_pose[0][1] + (direction[1] * self.level_thresholds[self.curriculum_level]),
-            0.0
-        ])
-    
-    # STANDARD GOAL POSE GENERATION
-    # def _gen_goal_pose(self):
-    #     new_pos = np.array([random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
-    #                         random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
-    #                         0.0])
-    #     return new_pos
+        new_pos = np.array([random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
+                            random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
+                            0.0])
+        return new_pos
     
     def seed(self, seed=None):
         self.np_random, seed = gym.utils.seeding.np_random(seed)
@@ -490,22 +412,27 @@ class SocEnv(gym.Env):
         world_data[:, 1] = (world_data[:, 1] - self.world_min_max[1]) / (self.world_min_max[3] - self.world_min_max[1])
         normalized_pos = (pos[:2] - self.world_min_max[:2]) / (self.world_min_max[2:] - self.world_min_max[:2])
 
+        # Create empty image
         image = np.zeros((image_size, image_size), dtype=np.uint8)
 
+        # Convert normalized coordinates to pixel coordinates
         pixel_coords = (world_data * (image_size - 1)).astype(int)
         bot_pixel = (normalized_pos * (image_size - 1)).astype(int)
 
+        # Plot lidar points
         valid_pixels = (pixel_coords[:, 0] >= 0) & (pixel_coords[:, 0] < image_size) & \
                     (pixel_coords[:, 1] >= 0) & (pixel_coords[:, 1] < image_size)
         image[pixel_coords[valid_pixels, 1], pixel_coords[valid_pixels, 0]] = 128  # Gray dots for lidar points
 
+        # Plot bot position
         bot_size = 1
         bot_x, bot_y = bot_pixel
         image[max(0, bot_y-bot_size):min(image_size, bot_y+bot_size+1),
             max(0, bot_x-bot_size):min(image_size, bot_x+bot_size+1)] = 255  # White square for bot
 
-        three_channel_image = np.stack([image] * 3, axis=0)
-        return three_channel_image
+        image = np.expand_dims(image, 0)
+
+        return image
 
 # TEST PURPOSE CODE
 # def run_episode(my_env):
@@ -570,16 +497,7 @@ class BestModelCallback(BaseCallback):
                     self.best_mean_reward = mean_reward
                     path = os.path.join(self.save_path, f"best_SocNav_{self.algo}_ckpt.zip")
                     self.model.save(path)
-                    
-                    metadata = {
-                        'mean_reward': float(mean_reward),
-                        'timestamp': time.time()
-                    }
-                    metadata_path = os.path.join(self.save_path, f"best_SocNav_{self.algo}_ckpt_metadata.json")
-                    with open(metadata_path, 'w') as f:
-                        json.dump(metadata, f)
-                    
-                    print(f"Saving best model to {path} with mean reward {mean_reward}")
+                    print(f"Saving best model to {path}")
         return True
 
 class IncrementalCheckpointCallback(CheckpointCallback):
@@ -627,129 +545,58 @@ class WandbCallback(BaseCallback):
 #         return True
 
 class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, algo="ppo", device="cuda"):
-        super(CustomCombinedExtractor, self).__init__(observation_space, features_dim=2) #Placeholder Feature dims for PyTorch call
-        
-        self.device = device
+    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256):
+        # We don't know features-dim here before going over all the items,
+        # so put something dummy for now. PyTorch requires calling
+        # nn.Module.__init__ before adding modules
+        super(CustomCombinedExtractor, self).__init__(observation_space, features_dim=2)
 
-        extractors = { 'vector': {}, 'image': {} }
+        extractors = {}
+
         total_concat_size = 0
+        # We need to know size of the output of this extractor,
+        # so go over all the spaces and compute output feature sizes
         for key, subspace in observation_space.spaces.items():
-            if algo == "ppo":
-                if key == "vector":
-                    # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(12, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 512),
-                        nn.ReLU(),
-                        nn.Linear(512, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 512),
-                        nn.ReLU()
-                    )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
-                    total_concat_size += 128
-                    
-                elif key == "image":
-                    # CNN for our image data (LiDAR for now)
-                    n_input_channels = 3
-                    n_flatten_size = 1024
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Flatten(),
-                        )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
-                    total_concat_size += cnn_output_dim
+            if key == "vector":
+                # Run through a small MLP
+                extractors[key] = nn.Sequential(
+                    nn.Linear(subspace.shape[0], 64),
+                    nn.ReLU(),
+                    nn.Linear(64, 64),
+                    nn.ReLU(),
+                    nn.Linear(64, 64),
+                    nn.ReLU()
+                )
+                total_concat_size += 64
+            elif key == "image":
+                # Run through a CNN
+                extractors[key] = nn.Sequential(
+                    nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+                    nn.ReLU(),
+                    nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+                    nn.ReLU(),
+                    nn.Flatten(),
+                    nn.Linear(64 * 32 * 32, cnn_output_dim),  # Adjust based on your image size
+                    nn.ReLU()
+                )
+                total_concat_size += cnn_output_dim
 
-            elif algo == 'sac':
-                if key == "vector":
-                # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(12, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 512),
-                        nn.ReLU(),
-                        nn.Linear(512, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 512),
-                        nn.ReLU()
-                    )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
-                    total_concat_size += 128
-                elif key == "image":
-                    # CNN for our image data (LiDAR for now)
-                    n_input_channels = 3
-                    n_flatten_size = 1024
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Flatten(),
-                        )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
-                    total_concat_size += cnn_output_dim
+        self.extractors = nn.ModuleDict(extractors)
 
-        self.extractors = { 'vector': nn.ModuleDict(extractors['vector']).to(self.device), 'image': nn.ModuleDict(extractors['image']).to(self.device) }
-        # self.extractors['vector'] = nn.ModuleDict(extractors['vector'])
-        # self.extractors['image'] = nn.ModuleDict(extractors['image'])
-        
+        # Update the features dim manually
         self._features_dim = total_concat_size
 
     def forward(self, observations) -> th.Tensor:
         encoded_tensor_list = []
 
+        # self.extractors contain nn.Modules that do all the processing.
         for key, extractor in self.extractors.items():
-            if key == "vector":
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0).to(self.device)
-                    core_out = extractor['core'](core_in)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = observations[key].view(-1, 12).to(self.device)
-                    core_out = extractor['core'](core_in).view(10, -1, 512)
-                    lstm_out = extractor['lstm'](core_out)[1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
+            if key == "lidar_data":
+                encoded_tensor_list.append(extractor(observations[key].unsqueeze(1)))  # Add channel dim
             else:
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0).to(self.device)
-                    core_out = extractor['core'](core_in)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = observations[key].view(-1, 3, 128, 128).to(self.device)
-                    core_out = extractor['core'](core_in).view(5, -1, 1024)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
-
-        return th.cat(encoded_tensor_list, dim=1) # encoded tensor is the batch dimension
+                encoded_tensor_list.append(extractor(observations[key]))
+        # Return a (B, self._features_dim) PyTorch tensor, where B is batch dimension.
+        return th.cat(encoded_tensor_list, dim=1)
 
 # def setup_logging():
 #     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -758,24 +605,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
 def get_checkpoint(algo: str, ckpt_dir: str, best: bool = True):
     pattern = os.path.join(ckpt_dir, f"{algo.upper()}_*_ckpts", f"{'best_' if best else ''}SocNav_{algo.upper()}_ckpt*.zip")
     checkpoints = glob.glob(pattern)
-    
-    if not checkpoints:
-        return None
-    
-    if best:
-        best_checkpoint = None
-        best_reward = -float('inf')
-        for checkpoint in checkpoints:
-            metadata_path = checkpoint.replace('.zip', '_metadata.json')
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                    if metadata['mean_reward'] > best_reward:
-                        best_reward = metadata['mean_reward']
-                        best_checkpoint = checkpoint
-        return best_checkpoint
-    else:
-        return max(checkpoints, key=os.path.getctime)
+    return max(checkpoints, key=os.path.getctime) if checkpoints else None
 
 def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
     if algo.lower() == 'ppo':
@@ -784,41 +614,39 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 my_env,
                 policy_kwargs=policy_kwargs,
                 verbose=1,
-                n_steps=1500,
-                batch_size=256,
-                learning_rate=5e-4,
-                gamma=0.99,
-                ent_coef=0.1,
+                n_steps=2560,
+                batch_size=64,
+                learning_rate=1e-3,
+                gamma=0.97,
+                ent_coef=0.0001,
                 clip_range=0.3,
-                n_epochs=10,
+                n_epochs=5,
                 device="cuda",
                 gae_lambda=1.0,
                 max_grad_norm=0.9,
                 vf_coef=0.95,
-                use_sde=False,
-                tensorboard_log=tensor_log_dir
-            )
+                tensorboard_log=tensor_log_dir)
     elif algo.lower() == 'sac':
         return SAC(
                 SACMultiPolicy,
                 my_env,
                 policy_kwargs=policy_kwargs,
                 verbose=1,
-                buffer_size=100000,
-                learning_rate=5e-4,
+                buffer_size=1000,
+                learning_rate=1e-3,
                 gamma=0.99,
-                batch_size=512,
+                batch_size=256,
                 tau=0.005,
-                ent_coef='auto_0.1',
+                ent_coef='auto',
                 target_update_interval=1,
                 train_freq=1,
-                gradient_steps=-1,
-                learning_starts=20000,
+                gradient_steps=1,
+                learning_starts=10000,
                 use_sde=False,
                 sde_sample_freq=-1,
                 use_sde_at_warmup=False,
-                device="cuda",
                 tensorboard_log=tensor_log_dir,
+                device="cuda"
             )
     
     else:
@@ -827,44 +655,43 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
 def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use')
-    parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode')
     parser.add_argument('--state_normalize', action='store_true', help='Normalize Observation States')
     parser.add_argument('--resume_checkpoint', action='store_true', help='Resume from the best checkpoint')
     args = parser.parse_args()
 
     try:
-        with wandb.init(project="Mod_Isaac_Soc_Nav", name=f"{args.algo.upper()}_training") as run:
-            log_dir = "/home/rah_m/Mod_SocNav_Logs"
-            ckpt_log_dir = os.path.join(log_dir, "Checkpoints")
-            tensor_log_dir = os.path.join(log_dir, "Tensorboard")
+        with wandb.init(project="New_Soc_Nav", name=f"{args.algo.upper()}_training") as run:
+            log_dir = "/home/rah_m/New_SocNav_Logs"
+            ckpt_log_dir = "/home/rah_m/New_SocNav_Logs/Checkpoints"
+            tensor_log_dir = "/home/rah_m/New_SocNav_Logs/Tensorboard"
+
             os.makedirs(ckpt_log_dir, exist_ok=True)
 
-            # print(f"Headless args : {args.headless}")
-            # print(f"Algo args : {args.algo}")
+            print(f"Headless args : {args.headless}")
+            print(f"Algo args : {args.algo}")
 
-            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, logdir=log_dir)
+            my_env = SocEnv(algo=args.algo, headless=args.headless, state_normalize=args.state_normalize, logdir=log_dir)
 
             best_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=True)
             latest_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=False)
             checkpoint_to_load = best_checkpoint or latest_checkpoint
+            print(f"Checkpoint to load: {checkpoint_to_load}")
 
             policy_kwargs = {
                 'ppo' : dict(net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])], activation_fn=th.nn.Tanh,
-                             features_extractor_class=CustomCombinedExtractor,
-                            features_extractor_kwargs=dict(cnn_output_dim=256, algo="ppo")),
+                            #  features_extractor_class=CustomCombinedExtractor,
+                            features_extractor_kwargs=dict(cnn_output_dim=256)),
                 'sac' : dict(net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]), activation_fn=th.nn.ReLU, use_sde=False, log_std_init=-3,
-                             features_extractor_class=CustomCombinedExtractor,
-                             features_extractor_kwargs=dict(cnn_output_dim=256, algo="sac"))}[args.algo.lower()]
+                            #  features_extractor_class=CustomCombinedExtractor,
+                             features_extractor_kwargs=dict(cnn_output_dim=256))}[args.algo.lower()]
+                # 'sac': dict(net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]), activation_fn=th.nn.ReLU, use_sde=False, log_std_init=-3)}[args.algo.lower()]
 
             model = create_model(args.algo, my_env, policy_kwargs, tensor_log_dir)
 
             if args.resume_checkpoint:
-                print(f"Checkpoint to load: {checkpoint_to_load}")
                 # logger.info(f"Loading checkpoint: {checkpoint_to_load}")
                 model = model.load(checkpoint_to_load, env=my_env)
-            else:
-                print("No Checkpoint Loading!!!")
 
             checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=10000, save_path=ckpt_log_dir, 
                                                                 name_prefix=f"SocNav_{args.algo.upper()}_ckpt")
@@ -887,15 +714,6 @@ def main():
 # if __name__ == '__main__':
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
-# BASIC RL PIPELINE CODE
 
 #     parser = argparse.ArgumentParser(description="Let's Train our Omni Isaac SocNav Agent!")
 #     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use (ppo or sac)')

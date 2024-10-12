@@ -627,18 +627,15 @@ class WandbCallback(BaseCallback):
 #         return True
 
 class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, algo="ppo", device="cuda"):
+    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, algo="ppo"):
         super(CustomCombinedExtractor, self).__init__(observation_space, features_dim=2) #Placeholder Feature dims for PyTorch call
-        
-        self.device = device
-
-        extractors = { 'vector': {}, 'image': {} }
+        extractors = {}
         total_concat_size = 0
         for key, subspace in observation_space.spaces.items():
             if algo == "ppo":
                 if key == "vector":
                     # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
+                    extractors[key] = nn.Sequential(
                         nn.Linear(12, 256),
                         nn.ReLU(),
                         nn.Linear(256, 512),
@@ -646,40 +643,29 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.Linear(512, 1024),
                         nn.ReLU(),
                         nn.Linear(1024, 512),
-                        nn.ReLU()
+                        nn.ReLU(),
+                        nn.LSTM(512, 128, num_layers=2)
                     )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
                     total_concat_size += 128
-                    
                 elif key == "image":
                     # CNN for our image data (LiDAR for now)
                     n_input_channels = 3
-                    n_flatten_size = 1024
-                    extractors[key]['core'] = nn.Sequential(
+                    n_flatten_size = 9216
+                    extractors[key] = nn.Sequential(
                         nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
                         nn.ReLU(),
                         nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
                         nn.ReLU(),
                         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
                         nn.Flatten(),
-                        )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
+                        nn.LSTM(n_flatten_size, 256, num_layers=2))
                     total_concat_size += cnn_output_dim
 
             elif algo == 'sac':
                 if key == "vector":
                 # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
+                    extractors[key] = nn.Sequential(
                         nn.Linear(12, 256),
                         nn.ReLU(),
                         nn.Linear(256, 512),
@@ -687,39 +673,27 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.Linear(512, 1024),
                         nn.ReLU(),
                         nn.Linear(1024, 512),
-                        nn.ReLU()
+                        nn.ReLU(),
+                        nn.LSTM(512, 128, num_layers=2)
                     )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
                     total_concat_size += 128
                 elif key == "image":
                     # CNN for our image data (LiDAR for now)
                     n_input_channels = 3
-                    n_flatten_size = 1024
-                    extractors[key]['core'] = nn.Sequential(
+                    n_flatten_size = 9216
+                    extractors[key] = nn.Sequential(
                         nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
                         nn.ReLU(),
                         nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
                         nn.ReLU(),
                         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
                         nn.Flatten(),
-                        )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
+                        nn.LSTM(n_flatten_size, 256, num_layers=2))
                     total_concat_size += cnn_output_dim
 
-        self.extractors = { 'vector': nn.ModuleDict(extractors['vector']).to(self.device), 'image': nn.ModuleDict(extractors['image']).to(self.device) }
-        # self.extractors['vector'] = nn.ModuleDict(extractors['vector'])
-        # self.extractors['image'] = nn.ModuleDict(extractors['image'])
-        
+
+        self.extractors = nn.ModuleDict(extractors)
         self._features_dim = total_concat_size
 
     def forward(self, observations) -> th.Tensor:
@@ -727,27 +701,11 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
 
         for key, extractor in self.extractors.items():
             if key == "vector":
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0).to(self.device)
-                    core_out = extractor['core'](core_in)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = observations[key].view(-1, 12).to(self.device)
-                    core_out = extractor['core'](core_in).view(10, -1, 512)
-                    lstm_out = extractor['lstm'](core_out)[1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
+                vec_out = extractor(observations[key].squeeze(0))[1][0]
+                encoded_tensor_list.append(vec_out[0].unsqueeze(0))
             else:
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0).to(self.device)
-                    core_out = extractor['core'](core_in)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = observations[key].view(-1, 3, 128, 128).to(self.device)
-                    core_out = extractor['core'](core_in).view(5, -1, 1024)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
+                img_out = extractor(observations[key].squeeze(0))[1][0]
+                encoded_tensor_list.append(img_out[0].unsqueeze(0))
 
         return th.cat(encoded_tensor_list, dim=1) # encoded tensor is the batch dimension
 
