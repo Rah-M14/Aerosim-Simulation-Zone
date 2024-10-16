@@ -136,8 +136,10 @@ class SocialReward:
         self.cosine_sim_rew = self.cosine_similarity_reward(prev_bot_pos, cur_bot_pos, goal_pos)
         self.dist_to_goal_rew = self.dist_to_goal(cur_bot_pos, goal_pos)
 
-        self.close_coll_rew = self.close_collision_reward(lidar_data)
-        self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
+        # self.close_coll_rew = self.close_collision_reward(lidar_data)
+        self.close_coll_rew = 0
+        # self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
+        self.collision_rew = 0
 
         self.current_rew = (self.close_to_goal_rew + self.cosine_sim_rew + self.dist_to_goal_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
         self.current_rew += self.level_rewards[self.curriculum_level]["step"]
@@ -189,7 +191,7 @@ class SocialReward:
     #     return self.to_goal_rew
     
     def close_to_goal_reward(self, cur_bot_pos, goal_pos):
-        dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
+        dist_to_goal = np.linalg.norm(np.array(goal_pos) - np.array(cur_bot_pos))
         if dist_to_goal < self.close_goal_dist_threshold:
             self.close_to_goal_rew = self.level_rewards[self.curriculum_level]["goal"]
             return self.close_to_goal_rew
@@ -198,20 +200,30 @@ class SocialReward:
     def dist_to_goal(self, cur_bot_pos, goal_pos):
         parabloic_factor = 10
         log_factor = 2
-        log_scaling_factor = 100
+        log_scaling_factor = 200
 
         cur_dist_to_goal = np.linalg.norm(goal_pos - cur_bot_pos)
         if cur_dist_to_goal < self.goal_dist_threshold:
             self.dist_to_goal_rew = np.log(cur_dist_to_goal*log_factor)*log_scaling_factor
         else:
             self.dist_to_goal_rew = np.log(cur_dist_to_goal*log_factor)*log_scaling_factor - parabloic_factor*(cur_dist_to_goal**2)
-        self.dist_to_goal_rew = -np.log(cur_dist_to_goal*100)
         return self.dist_to_goal_rew
     
     def cosine_similarity_reward(self, prev_bot_pos, cur_bot_pos, goal_pos):
-        bot_vec = cur_bot_pos - prev_bot_pos
-        bot_goal_vec = goal_pos - prev_bot_pos
-        self.cosine_sim_rew = self.cosine_sim_factor * (np.dot(bot_vec, bot_goal_vec) / (np.linalg.norm(bot_vec) * np.linalg.norm(bot_goal_vec)))
+        bot_vec = np.array(cur_bot_pos) - np.array(prev_bot_pos)
+        bot_goal_vec = np.array(goal_pos) - np.array(prev_bot_pos)
+        
+        bot_norm = np.linalg.norm(bot_vec)
+        bot_goal_norm = np.linalg.norm(bot_goal_vec)
+        
+        if bot_norm == 0 or bot_goal_norm == 0:
+            self.cosine_sim_rew = 0
+        else:
+            cosine_sim = np.dot(bot_vec, bot_goal_vec) / (bot_norm * bot_goal_norm)
+            self.cosine_sim_rew = self.cosine_sim_factor * cosine_sim
+            if self.cosine_sim_rew > 0:
+                self.cosine_sim_rew += 100
+
         return self.cosine_sim_rew
     
     # PATH CHECKS
@@ -326,4 +338,9 @@ class SocialReward:
     def end_episode(self, ep_count):
         self.log_episode_rewards(ep_count)
         self.reset_episode_rewards()
-        self.logger.info(f"Cosine similarity reward: {self.cosine_sim_rew}")
+
+    # CURRICULUM UPDATE
+    def update_curriculum_level(self, level):
+        self.curriculum_level = level
+        self.logger.info(f"Reward system updated to curriculum level {self.curriculum_level}")
+        wandb.log({"reward_curriculum_level": self.curriculum_level})
