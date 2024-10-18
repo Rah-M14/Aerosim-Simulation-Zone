@@ -122,7 +122,8 @@ def assign_labels_to_clusters(bbox_centroids, cluster_centroids, labels):
     n_boxes = len(bbox_centroids)
     n_clusters = len(cluster_centroids)
     if n_boxes > n_clusters:
-        raise ValueError("More bounding boxes than clusters, cannot assign!")
+        # raise ValueError("More bounding boxes than clusters, cannot assign!")
+        return {}
     # Compute the pairwise distance matrix
     if n_boxes == 0 or n_clusters == 0:
         return {}
@@ -174,7 +175,7 @@ def quaternion_to_rotation_matrix(ori):
         ]
     )
 
-def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=True, image_size=128):
+def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=True, image_size=64):
     if lidar_data.size == 0:
         return None, None
     pos = mlp_obs[0]
@@ -196,12 +197,25 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
 
     # yolo_model = YOLO("yolov9t.pt")
     bounding_boxes, labels_bbox = extract_bounding_boxes(yolo_model, camera_image)
+
+    # if lidar_points.size < len(bounding_boxes) or lidar_points.size < len(labels_bbox):
+    #     return np.zeros((3, image_size, image_size), dtype=np.uint8) / 255.0
+
     projected_lidar_polygons = [
         bounding_box_to_lidar_projection(bbox, pos) for bbox in bounding_boxes
     ]
     clustering_model = KMeans(n_clusters=len(bounding_boxes) if len(bounding_boxes) > 0 else 1)
+
+    # print("Clustering model: ", clustering_model)
+    # print(f"len bounding boxes: {len(bounding_boxes)}")
+    # # print(f"len lidar points: {len(lidar_points)}")
+    # print(f"lidar shape is: {lidar_points.shape}")
+    # print(f"lidar size is: {lidar_points.size}")
+    if lidar_points.shape[0] < len(bounding_boxes):
+        return np.zeros((3, image_size, image_size), dtype=np.uint8) / 255.0
+    else:
+        labels_clusters = clustering_model.fit_predict(lidar_points)
     
-    labels_clusters = clustering_model.fit_predict(lidar_points)
     project_to_lidar = project_camera
 
     # Get bounding box centroids (either in original space or projected)

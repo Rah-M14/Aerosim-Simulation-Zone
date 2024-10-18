@@ -38,10 +38,12 @@ class SocEnv(gym.Env):
         headless,
         state_normalize,
         logdir,
+        mlp_context=120,
+        img_context=30,
         skip_frame=1,
         physics_dt=1.0 / 60.0,
         rendering_dt=1.0 / 60.0,
-        max_episode_length=1500,
+        max_episode_length=1000,
         seed=0,
     ) -> None:
         
@@ -118,7 +120,7 @@ class SocEnv(gym.Env):
 
         from New_RL_Bot_Control import RLBotController, RLBotAct
         from New_RL_Bot import RLBot
-        from Mod_SocRewards import SocialReward
+        from Adv_SocRewards import SocialReward
         from Mod_Pegasus_App import PegasusApp
         from LiDAR_Feed import get_licam_image
 
@@ -181,30 +183,34 @@ class SocEnv(gym.Env):
         self.carter_vel_limits = np.array([7.0, 7.0])
         self.carter_ang_vel_limits = np.array([np.pi, np.pi])
         self.state_normalize = state_normalize
+        self.timestep = 0
+
+        self.frame_num = 0
 
         # BOT PARAMETERS
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
         self.max_velocity = 1.0
-        self.max_angular_velocity = np.pi * 5.0
+        self.max_angular_velocity = np.pi * 3
 
         self.yolo_model = YOLO("yolov9t.pt")
 
         # RL PARAMETERS
         self.seed(seed)
 
-        mlp_zeros = np.concatenate([np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(2), np.zeros(2)])
-        self.mlp_context_frame_length = 10
-        self.img_context_frame_length = 5
+        mlp_zeros = np.concatenate([np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(2), np.zeros(2), np.zeros(1)])
+        self.mlp_context_frame_length = mlp_context
+        self.img_context_frame_length = img_context
         self.mlp_context_frame = deque([mlp_zeros for _ in range(self.mlp_context_frame_length)], maxlen=self.mlp_context_frame_length)
-        self.img_context_frame = deque([np.zeros((3, 128, 128)) for _ in range(self.img_context_frame_length)], maxlen=self.img_context_frame_length)
+        self.img_context_frame = deque([np.zeros((3, 64, 64)) for _ in range(self.img_context_frame_length)], maxlen=self.img_context_frame_length)
         
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
-        self.action_space = spaces.Box(low=np.array([-1, -1]), high=np.array([2, 1]), shape=(2,), dtype=np.float32)
+        self.action_space = spaces.Box(low=np.array([-1.0, -1.0]), high=np.array([2.5, 1.0]), shape=(2,), dtype=np.float32)
         self.observation_space = spaces.Dict({
-            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 12), dtype=np.float32),
-            'image': spaces.Box(low=0, high=255, shape=(self.img_context_frame_length, 3, 128, 128), dtype=np.float32),
+            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 13), dtype=np.float32),
+            # 'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 12), dtype=np.float32),
+            'image': spaces.Box(low=0, high=1, shape=(self.img_context_frame_length, 3, 64, 64), dtype=np.float32),
             # 'camera_data': spaces.Box(low=0, high=255, shape=(255, 255, 3), dtype=np.uint8)
         })
 
@@ -283,6 +289,7 @@ class SocEnv(gym.Env):
         self.kit.update()
         self.bot.bot_reset()
         self.world.reset(True)
+        self.timestep = np.array([0.0])
 
         self.bot.rl_bot.start_pose = self.bot.rl_bot.get_world_pose()
         print(f"Start pose : {self.bot.rl_bot.start_pose}")
@@ -312,18 +319,26 @@ class SocEnv(gym.Env):
         bot_lin_vel = self.bot.rl_bot.get_linear_velocity()
         bot_ang_vel = self.bot.rl_bot.get_angular_velocity()
         goal_world_pos = self.bot.rl_bot.goal_pose
+        timestep = self.timestep
         if self.state_normalize == True:
+            # mlp_states = [bot_world_pos[:2]/self.world_limits,
+            #                     bot_world_ori / np.linalg.norm(bot_world_ori),
+            #                     bot_lin_vel[:2]/self.carter_vel_limits,
+            #                     bot_ang_vel[:2]/self.carter_ang_vel_limits,
+            #                     goal_world_pos[:2]/self.world_limits]
             mlp_states = [bot_world_pos[:2]/self.world_limits,
-                                bot_world_ori,
-                                bot_lin_vel[:2]/self.carter_vel_limits,
-                                bot_ang_vel[:2]/self.carter_ang_vel_limits,
-                                goal_world_pos[:2]/self.world_limits]
+                                bot_world_ori / np.linalg.norm(bot_world_ori),
+                                bot_lin_vel[:2],
+                                bot_ang_vel[:2],
+                                goal_world_pos[:2]/self.world_limits,
+                                timestep/self.max_episode_length]
         else:
             mlp_states = [bot_world_pos[:2],
                                 bot_world_ori,
                                 bot_lin_vel[:2],
                                 bot_ang_vel[:2],
-                                goal_world_pos[:2]]
+                                goal_world_pos[:2],
+                                timestep]
             
         self.mlp_context_frame.append(np.concatenate(mlp_states))
         mlp_combined_context = self.get_mlp_combined_context()
@@ -333,15 +348,15 @@ class SocEnv(gym.Env):
         if lidar_data.size == 0:
             lidar_data = None
             # lidar_image = np.zeros((3, 128, 128))
-            licam_image = np.zeros((3, 128, 128))
-            img_combined_context = th.zeros((self.img_context_frame_length, 3, 128, 128))
+            licam_image = np.zeros((3, 64, 64))
+            img_combined_context = th.zeros((self.img_context_frame_length, 3, 64, 64))
         else:
             # lidar_image = self.get_lidar_image(lidar_data, mlp_states)
             # self.img_context_frame.append(lidar_image)
-
-            li_cam_image = self.get_li_cam_image(lidar_data, camera_data, mlp_states, self.yolo_model, self.world_min_max, project_camera=True, image_size=128)
+            li_cam_image = self.get_li_cam_image(lidar_data, camera_data, mlp_states, self.yolo_model, self.world_min_max, project_camera=True, image_size=64)
             self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
+
         return {'vector': mlp_combined_context, 'image': img_combined_context}, lidar_data, camera_data, mlp_states
     
     def get_mlp_combined_context(self):
@@ -350,7 +365,7 @@ class SocEnv(gym.Env):
     def get_img_combined_context(self):
         return th.tensor(np.array(self.img_context_frame, dtype=np.float32))
     
-    def get_li_cam_image(self, lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=False, image_size=128):
+    def get_li_cam_image(self, lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=False, image_size=64):
         from LiDAR_Feed import get_licam_image
         return get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera, image_size)
     
@@ -366,24 +381,32 @@ class SocEnv(gym.Env):
     #         total_context.append(context)
     #     return th.tensor(np.array(total_context, dtype=np.float32))
     
+    # def de_normalize_states(self, observation):
+    #     return [observation[0] * self.world_limits,
+    #                             observation[1],
+    #                             observation[2] * self.carter_vel_limits,
+    #                             observation[3] * self.carter_ang_vel_limits,
+    #                             observation[4] * self.world_limits]
+
     def de_normalize_states(self, observation):
         return [observation[0] * self.world_limits,
                                 observation[1],
-                                observation[2] * self.carter_vel_limits,
-                                observation[3] * self.carter_ang_vel_limits,
+                                observation[2],
+                                observation[3],
                                 observation[4] * self.world_limits]
 
     def step(self, action): # action = [linear_velocity, angular_velocity] both between [-1,1]
         prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+        self.timestep += 1.0
 
         if action[0] > 3:
             action[0] = 3
         lin_vel = action[0] * self.max_velocity
         ang_vel = action[1] * self.max_angular_velocity
-        for _ in range(self._skip_frame):
-            self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
-            self.world.step(render=False)
-            self.ep_steps += 1
+        # for _ in range(self._skip_frame):
+        self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
+        self.world.step(render=False)
+        self.ep_steps += 1
 
         observations, lidar_data, camera_data, mlp_obs = self.get_observations()
 
@@ -428,7 +451,7 @@ class SocEnv(gym.Env):
         if self.reward_manager.check_goal_reached(cur_bot_pos, goal_pos):
             self.logger.info("Goal reached")
             return True, "goal_reached"
-        if self.reward_manager.check_boundary_collision(cur_bot_pos):
+        if self.reward_manager.check_boundary(cur_bot_pos):
             self.logger.info("Boundary collision detected")
             return True, "boundary_collision"
         return False, None
@@ -629,7 +652,7 @@ class WandbCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         self.step_count += 1
-        if self.step_count % 1000 == 0:
+        if self.step_count % 100 == 0:
             log_data = {
                 "total_timesteps": self.num_timesteps,
                 "learning_rate": self.model.learning_rate,
@@ -689,9 +712,11 @@ class GradientAccumulationCallback(BaseCallback):
 #         return True
 
 class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, algo="ppo", device="cuda"):
+    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 256, algo="ppo", device="cuda", mlp_context=120, img_context=30):
         super(CustomCombinedExtractor, self).__init__(observation_space, features_dim=2) #Placeholder Feature dims for PyTorch call
         
+        self.mlp_context = mlp_context
+        self.img_context = img_context
         self.device = device
 
         extractors = { 'vector': {}, 'image': {} }
@@ -701,7 +726,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                 if key == "vector":
                     # MLP for our vector data
                     extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(12, 256),
+                        nn.Linear(13, 256),
                         nn.ReLU(),
                         nn.Linear(256, 512),
                         nn.ReLU(),
@@ -714,7 +739,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     total_concat_size += 128
                     
                 elif key == "image":
-                    # CNN for our image data (LiDAR for now)
+                    # CNN for our image data (LiCam for now)
                     n_input_channels = 3
                     n_flatten_size = 1024
                     extractors[key]['core'] = nn.Sequential(
@@ -722,15 +747,15 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.ReLU(),
                         nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
                         nn.Flatten(),
@@ -742,7 +767,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                 if key == "vector":
                 # MLP for our vector data
                     extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(12, 256),
+                        nn.Linear(13, 256),
                         nn.ReLU(),
                         nn.Linear(256, 512),
                         nn.ReLU(),
@@ -754,7 +779,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
                     total_concat_size += 128
                 elif key == "image":
-                    # CNN for our image data (LiDAR for now)
+                    # CNN for our image data (LiCam for now)
                     n_input_channels = 3
                     n_flatten_size = 1024
                     extractors[key]['core'] = nn.Sequential(
@@ -762,15 +787,15 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.ReLU(),
                         nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
+                        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
                         nn.Flatten(),
@@ -779,9 +804,6 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     total_concat_size += cnn_output_dim
 
         self.extractors = { 'vector': nn.ModuleDict(extractors['vector']).to(self.device), 'image': nn.ModuleDict(extractors['image']).to(self.device) }
-        # self.extractors['vector'] = nn.ModuleDict(extractors['vector'])
-        # self.extractors['image'] = nn.ModuleDict(extractors['image'])
-        
         self._features_dim = total_concat_size
 
     def forward(self, observations) -> th.Tensor:
@@ -795,9 +817,10 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     lstm_out = extractor['lstm'](core_out)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
                 else:
-                    core_in = observations[key].view(-1, 12).to(self.device)
-                    core_out = extractor['core'](core_in).view(10, -1, 512)
+                    core_in = observations[key].view(-1, 13).to(self.device)
+                    core_out = extractor['core'](core_in).view(self.mlp_context, -1, 512)
                     lstm_out = extractor['lstm'](core_out)[1][0]
+
                     encoded_tensor_list.append(lstm_out[-1])
             else:
                 if observations[key].shape[0] == 1:
@@ -805,11 +828,32 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     core_out = extractor['core'](core_in)
                     lstm_out = extractor['lstm'](core_out)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
+
+                    # print(f"MPL_Encoded Tensor List Length: {len(encoded_tensor_list)}")
+                    # print(f"MPL_Encoded Tensor List Shape: {encoded_tensor_list[0].shape}")
+                    # print(f"MPL_Encoded Tensor List Shape: {encoded_tensor_list[1].shape}")
+
                 else:
-                    core_in = observations[key].view(-1, 3, 128, 128).to(self.device)
-                    core_out = extractor['core'](core_in).view(5, -1, 1024)
+                    core_in = observations[key].view(-1, 3, 64, 64).to(self.device)
+                    batch_size = core_in.shape[0]
+                    split_size = batch_size // 32
+                    core_in_n = th.split(core_in, split_size)
+
+                    core_out_n = []
+                    for i in range(split_size):
+                        core_out_n.append(extractor['core'](core_in_n[i]).view(self.img_context, -1, 1024))
+
+                    # Combine the results
+                    core_out = th.cat(core_out_n, dim=1)
+
+                    # Process through LSTM
                     lstm_out = extractor['lstm'](core_out)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1])
+
+                    # core_in = observations[key].view(-1, 3, 64, 64).to(self.device)                    
+                    # core_out = extractor['core'](core_in).view(self.img_context, -1, 1024)
+                    # lstm_out = extractor['lstm'](core_out)[-1][0]
+                    # encoded_tensor_list.append(lstm_out[-1])
 
         return th.cat(encoded_tensor_list, dim=1) # encoded tensor is the batch dimension
 
@@ -846,13 +890,13 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 my_env,
                 policy_kwargs=policy_kwargs,
                 verbose=1,
-                n_steps=500,
-                batch_size=64,
+                n_steps=2048,
+                batch_size=256,
                 learning_rate=5e-4,
                 gamma=0.99,
                 ent_coef=0.1,
                 clip_range=0.3,
-                n_epochs=1,
+                n_epochs=10,
                 device="cuda",
                 gae_lambda=1.0,
                 max_grad_norm=0.9,
@@ -866,16 +910,16 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 my_env,
                 policy_kwargs=policy_kwargs,
                 verbose=1,
-                buffer_size=10000,
+                buffer_size=5000,
                 learning_rate=1e-4,
                 gamma=0.99,
-                batch_size=16,
+                batch_size=512,
                 tau=0.005,
                 ent_coef='auto_0.1',
                 target_update_interval=1,
                 train_freq=(1, 'episode'),
                 gradient_steps=-1,
-                learning_starts=1000,
+                learning_starts=5000,
                 use_sde=False,
                 sde_sample_freq=-1,
                 use_sde_at_warmup=False,
@@ -891,6 +935,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use')
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
+    parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='best', help='Choose the checkpoint to resume from')
+    parser.add_argument('--mlp_context', type=int, default=30, help='Length of the MLP context')
+    parser.add_argument('--img_context', type=int, default=10, help='Length of the image Context')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode')
     parser.add_argument('--state_normalize', action='store_true', help='Normalize Observation States')
     parser.add_argument('--resume_checkpoint', action='store_true', help='Resume from the best checkpoint')
@@ -906,19 +953,24 @@ def main():
             # print(f"Headless args : {args.headless}")
             # print(f"Algo args : {args.algo}")
 
-            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, logdir=log_dir)
+            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, mlp_context=args.mlp_context, img_context=args.img_context, logdir=log_dir)
 
             best_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=True)
             latest_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=False)
-            checkpoint_to_load = best_checkpoint or latest_checkpoint
+            if args.ckpt == 'best':
+                checkpoint_to_load = best_checkpoint
+            else:
+                checkpoint_to_load = latest_checkpoint
+
+            # checkpoint_to_load = best_checkpoint or latest_checkpoint
 
             policy_kwargs = {
                 'ppo' : dict(net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])], activation_fn=th.nn.Tanh,
                              features_extractor_class=CustomCombinedExtractor,
-                            features_extractor_kwargs=dict(cnn_output_dim=256, algo="ppo")),
+                            features_extractor_kwargs=dict(cnn_output_dim=256, algo="ppo", device="cuda", mlp_context=args.mlp_context, img_context=args.img_context)),
                 'sac' : dict(net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]), activation_fn=th.nn.ReLU, use_sde=False, log_std_init=-3,
                              features_extractor_class=CustomCombinedExtractor,
-                             features_extractor_kwargs=dict(cnn_output_dim=256, algo="sac"))}[args.algo.lower()]
+                             features_extractor_kwargs=dict(cnn_output_dim=256, algo="sac", device='cuda', mlp_context=args.mlp_context, img_context=args.img_context))}[args.algo.lower()]
 
             model = create_model(args.algo, my_env, policy_kwargs, tensor_log_dir)
 
@@ -929,7 +981,7 @@ def main():
             else:
                 print("No Checkpoint Loading!!!")
 
-            checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=10000, save_path=ckpt_log_dir, 
+            checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=2000, save_path=ckpt_log_dir, 
                                                                 name_prefix=f"SocNav_{args.algo.upper()}_ckpt")
             wandb_callback = WandbCallback(algo=args.algo)
             best_model_callback = BestModelCallback(algo=args.algo, save_path=os.path.join(ckpt_log_dir, f"{args.algo.upper()}_{checkpoint_callback.run_number}_ckpts"))

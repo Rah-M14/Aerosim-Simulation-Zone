@@ -26,13 +26,13 @@ class SocialReward:
         self.collision_rew = 0
 
         # LIVE REWARD
-        self.live_reward = -1
+        self.live_reward = -100
 
         # SOCIAL THRESHOLDS & WEIGHTS
-        self.coll_dist_threshold = 0
-        self.coll_threshold = 0
-        self.coll_exp_rew_scale = 0
-        self.collision_penalty = 0
+        self.coll_dist_threshold = 1.0
+        self.coll_threshold = 0.2
+        self.coll_exp_rew_scale = 10
+        self.collision_penalty = -100
         self.min_cluster_size = 3
         self.cluster_eps = 0.5
         self.angle_weight = 0.5
@@ -40,7 +40,7 @@ class SocialReward:
         # BOUNDARY THRESHOLDS
         self.x_limits = (-9,9)
         self.y_limits = (-7,7)
-        self.boundary_threshold = 0.1
+        self.boundary_threshold = 0.5
         self.boundary_coll_penalty = -10000
 
         # GOAL & TERMINAL REWARDS & THRESHOLDS
@@ -136,10 +136,10 @@ class SocialReward:
         self.cosine_sim_rew = self.cosine_similarity_reward(prev_bot_pos, cur_bot_pos, goal_pos)
         self.dist_to_goal_rew = self.dist_to_goal(cur_bot_pos, goal_pos)
 
-        # self.close_coll_rew = self.close_collision_reward(lidar_data)
-        self.close_coll_rew = 0
-        # self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
-        self.collision_rew = 0
+        self.close_coll_rew = self.close_collision_reward(lidar_data)
+        # self.close_coll_rew = 0
+        self.collision_rew = self.collision_penalty if self.check_collision(cur_bot_pos, lidar_data) else 0
+        # self.collision_rew = 0
 
         self.current_rew = (self.close_to_goal_rew + self.cosine_sim_rew + self.dist_to_goal_rew + self.close_coll_rew + self.collision_rew + self.live_reward)
         self.current_rew += self.level_rewards[self.curriculum_level]["step"]
@@ -292,7 +292,7 @@ class SocialReward:
 
         self.logger.info(f"Total close collision reward: {total_reward:.2f}")
         # return total_reward
-        return 0
+        return total_reward
     
     def check_collision(self, agent_position, lidar_data):
         if lidar_data is None or len(lidar_data) == 0:
@@ -317,9 +317,7 @@ class SocialReward:
         y_min, y_max = self.y_limits
 
         x_collision = abs(x - x_min) < self.boundary_threshold or abs(x - x_max) < self.boundary_threshold
-        # print(f"X collision: {x_collision}, x_min_coll : {abs(x - x_min)}, x_max_coll : {abs(x - x_max)}")
         y_collision = abs(y - y_min) < self.boundary_threshold or abs(y - y_max) < self.boundary_threshold
-        # print(f"Y collision: {y_collision}, y_min_coll : {abs(y - y_min)}, y_max_coll : {abs(y - y_max)}")
 
         x_out = x < x_min or x > x_max
         y_out = y < y_min or y > y_max

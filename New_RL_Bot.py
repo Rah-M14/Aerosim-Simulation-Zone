@@ -218,8 +218,9 @@ class RLBot():
         valid_pos_y = random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100)))))
         new_pos = np.array([valid_pos_x, valid_pos_y, 0.0])
 
-        self.rl_bot.set_default_state(position=new_pos, orientation=np.array([1, 0, 0, 0]))
-        # start_pos, start_ori = (np.array([0.0, -4.0, 0.0]), np.array([1.0, 0.0, 0.0, 0.0]))
-        # self.rl_bot.set_default_state(position=start_pos, orientation=start_ori)        
-        print("Bot is reset!")
+        yaw_angle = random.uniform(0, 2 * np.pi)
+        orientation = np.array([np.cos(yaw_angle / 2), 0, 0, np.sin(yaw_angle / 2)])  # Quaternion for rotation around z-axis
+        # Set the bot's state with the new position and orientation
+        self.rl_bot.set_default_state(position=new_pos, orientation=orientation)
+        print("Bot is Reset!")
     

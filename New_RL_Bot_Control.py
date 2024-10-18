@@ -96,6 +96,6 @@ class RLBotAct():
     def move_bot(self, vals: np.array):
         if vals.shape[0] != 2:
             raise ValueError("The input array should have two elements, first element is the forward velocity & second element is the angular velocity.")
-        for _ in range(self.n_steps):
-            self.bot.apply_wheel_actions(self.controller.forward(vals))
+        # for _ in range(self.n_steps):
+        self.bot.apply_wheel_actions(self.controller.forward(vals))
         return None
