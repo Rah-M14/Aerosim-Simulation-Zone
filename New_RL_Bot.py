@@ -113,7 +113,7 @@ class RLBot():
                 path="/Lidar",
                 parent="/World/jackal/base_link/sick_lms1xx_lidar_frame",
                 config=lidar_config,
-                translation=(0, 0, 0.033),
+                translation=(0, 0, 0.025),
                 orientation=Gf.Quatd(1,0,0,0),
             )
             render_product = rep.create.render_product(self.rl_bot_lidar.GetPath(), [1, 1])
@@ -178,7 +178,6 @@ class RLBot():
             writer = rep.writers.get("RtxLidarDebugDrawPointCloudBuffer")
             writer.attach(render_product)
 
-
     def _get_lidar_data(self):
         self.kit.update()
         self.timeline.pause()
@@ -219,8 +218,6 @@ class RLBot():
         new_pos = np.array([valid_pos_x, valid_pos_y, 0.0])
 
         yaw_angle = random.uniform(0, 2 * np.pi)
-        orientation = np.array([np.cos(yaw_angle / 2), 0, 0, np.sin(yaw_angle / 2)])  # Quaternion for rotation around z-axis
-        # Set the bot's state with the new position and orientation
+        orientation = np.array([np.cos(yaw_angle / 2), 0, 0, np.sin(yaw_angle / 2)])
         self.rl_bot.set_default_state(position=new_pos, orientation=orientation)
         print("Bot is Reset!")
-    

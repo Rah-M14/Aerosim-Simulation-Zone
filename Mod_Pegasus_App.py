@@ -64,7 +64,7 @@ class GoTo_Controller(PersonController):
 
         self.movement_generator = movement_generator
 
-    def update(self, dt: float):
+    def update(self, dt=1/30):
         """
         New additions to integrate with previous code.
         """

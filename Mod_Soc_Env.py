@@ -347,16 +347,14 @@ class SocEnv(gym.Env):
         camera_data = self.bot.rl_bot_camera.get_rgba()[:, :, :3]
         if lidar_data.size == 0:
             lidar_data = None
-            # lidar_image = np.zeros((3, 128, 128))
             licam_image = np.zeros((3, 64, 64))
             img_combined_context = th.zeros((self.img_context_frame_length, 3, 64, 64))
         else:
-            # lidar_image = self.get_lidar_image(lidar_data, mlp_states)
-            # self.img_context_frame.append(lidar_image)
             li_cam_image = self.get_li_cam_image(lidar_data, camera_data, mlp_states, self.yolo_model, self.world_min_max, project_camera=True, image_size=64)
-            self.img_context_frame.append(li_cam_image)
+            if self.timestep % 2 == 0:
+                self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
-
+        
         return {'vector': mlp_combined_context, 'image': img_combined_context}, lidar_data, camera_data, mlp_states
     
     def get_mlp_combined_context(self):
@@ -368,25 +366,6 @@ class SocEnv(gym.Env):
     def get_li_cam_image(self, lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=False, image_size=64):
         from LiDAR_Feed import get_licam_image
         return get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera, image_size)
-    
-    # def get_mlp_combined_context(self):
-    #     total_context = []
-    #     for context in self.mlp_context_frame:
-    #         total_context.append(np.concatenate(context))
-    #     return th.tensor(np.array(total_context, dtype=np.float32))
-
-    # def get_img_combined_context(self):
-    #     total_context = []
-    #     for context in self.img_context_frame:
-    #         total_context.append(context)
-    #     return th.tensor(np.array(total_context, dtype=np.float32))
-    
-    # def de_normalize_states(self, observation):
-    #     return [observation[0] * self.world_limits,
-    #                             observation[1],
-    #                             observation[2] * self.carter_vel_limits,
-    #                             observation[3] * self.carter_ang_vel_limits,
-    #                             observation[4] * self.world_limits]
 
     def de_normalize_states(self, observation):
         return [observation[0] * self.world_limits,
@@ -415,11 +394,9 @@ class SocEnv(gym.Env):
         
         self.info = {}
         
-        # camera_data = self.bot.rl_bot_camera.get_rgba()[:, :, :3]
         self.info['lidar_data'] = lidar_data
         self.info['camera_data'] = camera_data
 
-        # mlp_obs = np.array(mlp_obs)
         reward, to_point_rew, reward_dict, ep_rew_dict = self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-1], lidar_data)
         done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[-1])
         if done:
@@ -724,24 +701,24 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         for key, subspace in observation_space.spaces.items():
             if algo == "ppo":
                 if key == "vector":
-                    # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(13, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 512),
-                        nn.ReLU(),
-                        nn.Linear(512, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 512),
-                        nn.ReLU()
-                    )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
-                    total_concat_size += 128
+                #     # MLP for our vector data
+                #     extractors[key]['core'] = nn.Sequential(
+                #         nn.Linear(13, 256),
+                #         nn.ReLU(),
+                #         nn.Linear(256, 512),
+                #         nn.ReLU(),
+                #         nn.Linear(512, 1024),
+                #         nn.ReLU(),
+                #         nn.Linear(1024, 512),
+                #         nn.ReLU()
+                #     )
+                    extractors[key]['lstm'] = nn.LSTM(13, 64, num_layers=1)
+                    total_concat_size += 64
                     
                 elif key == "image":
                     # CNN for our image data (LiCam for now)
                     n_input_channels = 3
-                    n_flatten_size = 1024
+                    n_flatten_size = 256
                     extractors[key]['core'] = nn.Sequential(
                         nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
                         nn.ReLU(),
@@ -749,39 +726,39 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.ReLU(),
                         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding='same'),
+                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
                         nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
+                        # nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+                        # nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
+                        # nn.ReLU(),
                         nn.Conv2d(128, 256, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
                         nn.Flatten(),
                         )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
-                    total_concat_size += cnn_output_dim
+                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 128, num_layers=2)
+                    total_concat_size += 128
 
             elif algo == 'sac':
                 if key == "vector":
                 # MLP for our vector data
-                    extractors[key]['core'] = nn.Sequential(
-                        nn.Linear(13, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 512),
-                        nn.ReLU(),
-                        nn.Linear(512, 1024),
-                        nn.ReLU(),
-                        nn.Linear(1024, 512),
-                        nn.ReLU()
-                    )
-                    extractors[key]['lstm'] = nn.LSTM(512, 128, num_layers=2)
-                    total_concat_size += 128
+                    # extractors[key]['core'] = nn.Sequential(
+                    #     nn.Linear(13, 256),
+                    #     nn.ReLU(),
+                    #     nn.Linear(256, 512),
+                    #     nn.ReLU(),
+                    #     nn.Linear(512, 1024),
+                    #     nn.ReLU(),
+                    #     nn.Linear(1024, 512),
+                    #     nn.ReLU()
+                    # )
+                    extractors[key]['lstm'] = nn.LSTM(13, 64, num_layers=1)
+                    total_concat_size += 64
                 elif key == "image":
                     # CNN for our image data (LiCam for now)
                     n_input_channels = 3
-                    n_flatten_size = 1024
+                    n_flatten_size = 256
                     extractors[key]['core'] = nn.Sequential(
                         nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
                         nn.ReLU(),
@@ -789,19 +766,19 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                         nn.ReLU(),
                         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding='same'),
                         nn.ReLU(),
-                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding='same'),
+                        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
                         nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
                         nn.ReLU(),
-                        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
-                        nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-                        nn.ReLU(),
+                        # nn.Conv2d(128, 128, kernel_size=3, stride=1, padding='same'),
+                        # nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
+                        # nn.ReLU(),
                         nn.Conv2d(128, 256, kernel_size=3, stride=1, padding='same'),
                         nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
                         nn.ReLU(),
                         nn.Flatten(),
                         )
-                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 256, num_layers=2)
-                    total_concat_size += cnn_output_dim
+                    extractors[key]['lstm'] = nn.LSTM(n_flatten_size, 128, num_layers=2)
+                    total_concat_size += 128
 
         self.extractors = { 'vector': nn.ModuleDict(extractors['vector']).to(self.device), 'image': nn.ModuleDict(extractors['image']).to(self.device) }
         self._features_dim = total_concat_size
@@ -813,37 +790,36 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
             if key == "vector":
                 if observations[key].shape[0] == 1:
                     core_in = observations[key].squeeze(0).to(self.device)
-                    core_out = extractor['core'](core_in)
-                    lstm_out = extractor['lstm'](core_out)[-1][0]
+                    lstm_out = extractor['lstm'](core_in)[-1][0]
+                    # print(f"lstm out mlp : {lstm_out.shape}")
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
                 else:
-                    core_in = observations[key].view(-1, 13).to(self.device)
-                    core_out = extractor['core'](core_in).view(self.mlp_context, -1, 512)
-                    lstm_out = extractor['lstm'](core_out)[1][0]
-
+                    core_in = observations[key].view(self.mlp_context, -1, 13).to(self.device)
+                    lstm_out = extractor['lstm'](core_in)[1][0]
+                    # print(f"lstm out mlp else : {lstm_out.shape}")
                     encoded_tensor_list.append(lstm_out[-1])
             else:
                 if observations[key].shape[0] == 1:
                     core_in = observations[key].squeeze(0).to(self.device)
                     core_out = extractor['core'](core_in)
+                    # print(f"shape of core out img: {lstm_out.shape}")
                     lstm_out = extractor['lstm'](core_out)[-1][0]
+                    # print(f"shape of lstm out img: {lstm_out.shape}")
+
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
 
-                    # print(f"MPL_Encoded Tensor List Length: {len(encoded_tensor_list)}")
-                    # print(f"MPL_Encoded Tensor List Shape: {encoded_tensor_list[0].shape}")
-                    # print(f"MPL_Encoded Tensor List Shape: {encoded_tensor_list[1].shape}")
-
                 else:
-                    core_in = observations[key].view(-1, 3, 64, 64).to(self.device)
+                    # print(f"shape of core in img: {observations[key].shape}")
+                    # core_in = observations[key].view(self.img_context, -1, 3, 64, 64).to(self.device)
+                    # print(f"shape of core in img: {core_in.shape}")
+                    core_in = observations[key].to(self.device)
                     batch_size = core_in.shape[0]
-                    split_size = batch_size // 32
-                    core_in_n = th.split(core_in, split_size)
-
                     core_out_n = []
-                    for i in range(split_size):
-                        core_out_n.append(extractor['core'](core_in_n[i]).view(self.img_context, -1, 1024))
+                    for i in range(batch_size):
+                        # print(f"shape of core out original : {extractor['core'](core_in[i]).shape} ")
+                        # print(f"shape of core out : {extractor['core'](core_in[i]).view(self.img_context, -1, 256).shape} ")
+                        core_out_n.append(extractor['core'](core_in[i]).view(self.img_context, -1, 256))
 
-                    # Combine the results
                     core_out = th.cat(core_out_n, dim=1)
 
                     # Process through LSTM
@@ -919,7 +895,7 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 target_update_interval=1,
                 train_freq=(1, 'episode'),
                 gradient_steps=-1,
-                learning_starts=5000,
+                learning_starts=1,
                 use_sde=False,
                 sde_sample_freq=-1,
                 use_sde_at_warmup=False,
@@ -927,7 +903,6 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 device="cuda",
                 tensorboard_log=tensor_log_dir,
             )
-    
     else:
         raise ValueError(f"Unsupported algorithm: {algo}")
 
@@ -937,7 +912,7 @@ def main():
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
     parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='best', help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=30, help='Length of the MLP context')
-    parser.add_argument('--img_context', type=int, default=10, help='Length of the image Context')
+    parser.add_argument('--img_context', type=int, default=15, help='Length of the image Context')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode')
     parser.add_argument('--state_normalize', action='store_true', help='Normalize Observation States')
     parser.add_argument('--resume_checkpoint', action='store_true', help='Resume from the best checkpoint')

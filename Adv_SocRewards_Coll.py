@@ -15,7 +15,7 @@ class SocialReward:
             'ep_smooth_crash_rew': 0,
             # 'ep_hard_crash_rew': 0,
             'ep_close_coll_rew': 0,
-            'ep_collision_rew': 0,
+            # 'ep_collision_rew': 0,
             'ep_goal_reached_rew': 0,
             'ep_current_rew': 0
         }
@@ -37,14 +37,14 @@ class SocialReward:
         self.collision_rew = 0
 
         # LIVE REWARD
-        self.live_reward = -100
+        self.live_reward = -1
 
         # SOCIAL THRESHOLDS & WEIGHTS
         self.coll_dist_threshold = 1.0
         self.coll_threshold = 0.2
-        self.coll_exp_rew_scale = 10
+        self.coll_exp_rew_scale = 11
         self.collision_penalty = -100
-        self.min_cluster_size = 3
+        self.min_cluster_size = 2
         self.cluster_eps = 0.5
         self.angle_weight = 0.5
 
@@ -52,22 +52,22 @@ class SocialReward:
         self.x_limits = (-9,9)
         self.y_limits = (-7,7)
         self.boundary_threshold = 0.5
-        self.boundary_coll_penalty = -100
+        self.boundary_coll_penalty = -50
 
         # GOAL & TERMINAL REWARDS & THRESHOLDS
         # self.timeout_penalty = -1000
-        self.timeout_penalty = 0
+        self.timeout_penalty = -100
         self.goal_reward = 10000
         self.goal_dist_threshold = 2
         self.close_goal_dist_threshold = 0.5
 
         # CURRICULUM REWARDS
-        self.curriculum_level = 1
+        self.curriculum_level = 4
         self.level_rewards = {
-            1: {"goal": 2000, "step": -0.1},
-            2: {"goal": 2000, "step": -0.2},
-            3: {"goal": 2000, "step": -0.3},
-            4: {"goal": 200, "step": -0.5}
+            1: {"goal": 20000, "step": -0.1},
+            2: {"goal": 20000, "step": -0.2},
+            3: {"goal": 20000, "step": -0.3},
+            4: {"goal": 20000, "step": -0.5}
         }
 
         # NEW PARAMETERS
@@ -151,7 +151,7 @@ class SocialReward:
             'ep_smooth_crash_rew': 0,
             # 'ep_hard_crash_rew': 0,
             'ep_close_coll_rew': 0,
-            'ep_collision_rew': 0,
+            # 'ep_collision_rew': 0,
             'ep_goal_reached_rew': 0,
             'ep_current_rew': 0
         }
@@ -165,7 +165,7 @@ class SocialReward:
                        'smooth_crash_rew': 0, 
                     #    'hard_crash_rew': 0, 
                        'close_coll_rew': 0, 
-                       'collision_rew': 0, 
+                    #    'collision_rew': 0, 
                        'goal_reached_rew': 0, 
                        'current_rew': 0}
         self.episode_length += 1
@@ -174,28 +174,24 @@ class SocialReward:
             reward_dict['goal_reached_rew'] = self.level_rewards[self.curriculum_level]["goal"]
             self.current_rew = reward_dict['goal_reached_rew']
             self.logger.info(f"Goal reached! Reward: {self.goal_reward}")
-        # elif self.check_boundary(cur_bot_pos):
-        #     reward_dict['hard_crash_rew'] = self.hard_crash_penalty()
-        #     self.current_rew = reward_dict['hard_crash_rew']
-        #     self.logger.info(f"Hard Crash! Reward: {self.current_rew}")
         else:
             direction_reward = self.reward_for_direction(cur_bot_pos, prev_bot_pos, goal_pos)
             scaled_direction_reward = self.scale_direction_reward(direction_reward, cur_bot_pos, goal_pos)
-            # reward_dict['cosine_sim_rew'] = scaled_direction_reward
-            reward_dict['cosine_sim_rew'] = 0
+            reward_dict['cosine_sim_rew'] = scaled_direction_reward
 
             distance_reward = self.reward_for_distance(cur_bot_pos, prev_bot_pos, goal_pos)
             scaled_distance_reward = self.scale_distance_reward(distance_reward, cur_bot_pos, goal_pos)
-            # reward_dict['dist_to_goal_rew'] = scaled_distance_reward
-            reward_dict['dist_to_goal_rew'] = 0
+            reward_dict['dist_to_goal_rew'] = scaled_distance_reward
 
             smooth_crash_penalty = self.smooth_crash_penalty(cur_bot_pos)
             reward_dict['smooth_crash_rew'] = smooth_crash_penalty
 
             reward_dict['close_coll_rew'] = self.close_collision_reward(lidar_data)
-            reward_dict['collision_rew'] = self.collision_rew if self.check_collision(cur_bot_pos, lidar_data) else 0
+            # reward_dict['close_coll_rew'] = 0
+            # reward_dict['collision_rew'] = self.collision_rew if self.check_collision(cur_bot_pos, lidar_data) else 0
+            # reward_dict['collision_rew'] = 0
 
-            self.current_rew = scaled_direction_reward + scaled_distance_reward + smooth_crash_penalty + reward_dict['close_coll_rew'] + reward_dict['collision_rew']
+            self.current_rew = scaled_direction_reward + scaled_distance_reward + smooth_crash_penalty + reward_dict['close_coll_rew'] + self.live_reward 
 
         reward_dict['current_rew'] = self.current_rew
 
@@ -259,7 +255,7 @@ class SocialReward:
         # self.ep_reward_dict['ep_hard_crash_rew'] += reward_dict['hard_crash_rew']
         self.ep_reward_dict['ep_smooth_crash_rew'] += reward_dict['smooth_crash_rew']
         self.ep_reward_dict['ep_close_coll_rew'] += reward_dict['close_coll_rew']
-        self.ep_reward_dict['ep_collision_rew'] += reward_dict['collision_rew']
+        # self.ep_reward_dict['ep_collision_rew'] += reward_dict['collision_rew']
         self.ep_reward_dict['ep_goal_reached_rew'] += reward_dict['goal_reached_rew']
         self.ep_reward_dict['ep_current_rew'] += reward_dict['current_rew']
 
@@ -406,26 +402,27 @@ class SocialReward:
             close_mask = (cluster_distances < self.coll_dist_threshold)
             if np.any(close_mask):
                 close_distances = cluster_distances[close_mask]
+                self.logger.info(f"Average Distance in Cluster {label} : {np.mean(close_distances)}")
                 close_angles = cluster_angles[close_mask]
                 
                 dist_reward = (-np.sum(np.exp(self.coll_exp_rew_scale * (self.coll_dist_threshold - close_distances)))) / np.sum(cluster_mask)
                 
                 angle_factor = np.cos(close_angles)  # cos(0) = 1 (front), cos(±pi/2) = 0 (sides)
-                angle_reward = -np.sum(np.abs(angle_factor) * np.exp(self.coll_exp_rew_scale * (self.coll_dist_threshold - close_distances))) / np.sum(cluster_mask)
+                angle_reward = -np.sum(np.abs(angle_factor) * np.exp(self.coll_exp_rew_scale * (self.coll_dist_threshold - close_distances)) * 1e-3) / np.sum(cluster_mask)
 
-                print(f"Distance_reward: {dist_reward}")
-                print(f"Angle_reward: {angle_reward}")
+                # print(f"Distance_reward: {dist_reward}")
+                # print(f"Angle_reward: {angle_reward}")
                 
-                cluster_reward = (1 - self.angle_weight) * dist_reward + self.angle_weight * angle_reward
-                print(f"Cluster_reward: {cluster_reward}")
-                total_reward += cluster_reward
+                # cluster_reward = (1 - self.angle_weight) * dist_reward + self.angle_weight * angle_reward
+                # print(f"Cluster_reward: {cluster_reward}")
+                total_reward += angle_reward
 
                 log_msg = f"Cluster {label}:\n"
                 log_msg += f"  Points in cluster: {np.sum(cluster_mask)}\n"
                 log_msg += f"  Close points: {np.sum(close_mask)}\n"
                 log_msg += f"  Distance-based reward: {dist_reward:.2f}\n"
                 log_msg += f"  Angle-based reward: {angle_reward:.2f}\n"
-                log_msg += f"  Combined cluster reward: {cluster_reward:.2f}"
+                # log_msg += f"  Combined cluster reward: {cluster_reward:.2f}"
                 self.logger.info(log_msg)
             else:
                 self.logger.info(f"Cluster {label}: No close points")
@@ -434,21 +431,20 @@ class SocialReward:
         # return total_reward
         return total_reward
     
-    def check_collision(self, agent_position, lidar_data):
-        if lidar_data is None or len(lidar_data) == 0:
-            self.logger.warning("Lidar data is empty or None for collision check")
-            return False
-        distances = np.linalg.norm(lidar_data[:, :2] - agent_position, axis=1)
-        min_distance = np.min(distances)
-        collision = np.any(distances < self.coll_threshold)
+    # def check_collision(self, agent_position, lidar_data):
+    #     if lidar_data is None or len(lidar_data) == 0:
+    #         self.logger.warning("Lidar data is empty or None for collision check")
+    #         return False
+    #     distances = np.linalg.norm(lidar_data[:, :2] - agent_position, axis=1)
+    #     min_distance = np.min(distances)
+    #     collision = np.any(distances < self.coll_threshold)
 
-        log_msg = f"Agent position: {agent_position}\n"
-        log_msg += f"Minimum distance to obstacle: {min_distance:.2f}\n"
-        log_msg += f"Collision detected: {collision}"
-        self.logger.info(log_msg)
-        wandb.log({"min_distance_to_obstacle": min_distance})
-        return np.any(distances < self.coll_threshold)
-
+    #     log_msg = f"Agent position: {agent_position}\n"
+    #     log_msg += f"Minimum distance to obstacle: {min_distance:.2f}\n"
+    #     log_msg += f"Collision detected: {collision}"
+    #     self.logger.info(log_msg)
+    #     wandb.log({"min_distance_to_obstacle": min_distance})
+    #     return np.any(distances < self.coll_threshold)
 
     # BOUNDARY REWARDS
     def check_boundary_collision(self, cur_bot_pos):

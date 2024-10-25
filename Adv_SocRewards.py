@@ -62,12 +62,12 @@ class SocialReward:
         self.close_goal_dist_threshold = 0.5
 
         # CURRICULUM REWARDS
-        self.curriculum_level = 1
+        self.curriculum_level = 4
         self.level_rewards = {
-            1: {"goal": 2000, "step": -0.1},
-            2: {"goal": 2000, "step": -0.2},
-            3: {"goal": 2000, "step": -0.3},
-            4: {"goal": 2000, "step": -0.5}
+            1: {"goal": 20000, "step": -0.1},
+            2: {"goal": 20000, "step": -0.2},
+            3: {"goal": 20000, "step": -0.3},
+            4: {"goal": 20000, "step": -0.5}
         }
 
         # NEW PARAMETERS
