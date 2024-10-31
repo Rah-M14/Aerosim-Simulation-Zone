@@ -1,0 +1,20 @@
+Padding - 0.05 for the Obstacles
+B_Bench_Left - L(-2.5, 2.5) T(-1.8,0.56)
+B_Bench_Mid - B_Bench_Left + 3.5y
+B_BencH_Right - B_Bench_Left + 7y
+F_Bench_Left - B_Bench_Left + 5x
+F_Bench_Mid - B_Bench_Mid + 5x
+F_Bench_Right - B_Bench_Right + 5x
+B_Chair_Left - L(-0.5,2.3) T(0.27, -1.5)
+B_Chair_Right - Chair_M_Left + 5y
+F_Chair_Left - B_Chair_Left + 4.1x
+F_Chair_Right - B_Chair_Right + 4.1x
+Siting Prims
+/World/Waiting_Room_Base/LemaySofa_Left
+/World/Waiting_Room_Base/LemaySofa_Right
+/World/Waiting_Room_Base/Maplewood_Sofa_Right
+/World/Waiting_Room_Base/Maplewood_Sofa_Left
+/World/Waiting_Room_Base/Maplewood_Sofa
+/World/Waiting_Room_Base/Maplewood_Sofa_01
+/World/Waiting_Room_Base/Maplewood_Chair
+/World/Waiting_Room_Base/Maplewood_Chair_01
