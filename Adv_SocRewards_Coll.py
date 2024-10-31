@@ -37,7 +37,7 @@ class SocialReward:
         self.collision_rew = 0
 
         # LIVE REWARD
-        self.live_reward = -1
+        self.live_reward = -2
 
         # SOCIAL THRESHOLDS & WEIGHTS
         self.coll_dist_threshold = 1.0
@@ -64,17 +64,17 @@ class SocialReward:
         # CURRICULUM REWARDS
         self.curriculum_level = 4
         self.level_rewards = {
-            1: {"goal": 20000, "step": -0.1},
-            2: {"goal": 20000, "step": -0.2},
-            3: {"goal": 20000, "step": -0.3},
-            4: {"goal": 20000, "step": -0.5}
+            1: {"goal": 1000, "step": -0.1},
+            2: {"goal": 1000, "step": -0.2},
+            3: {"goal": 1000, "step": -0.3},
+            4: {"goal": 1000, "step": -0.5}
         }
 
         # NEW PARAMETERS
         # self.max_distance_per_step = 0.1  # Adjust based on your environment
         self.max_distance = 10.0  # Maximum possible distance in the environment
         self.boundary_limits = (-9.5, 9.5, -6.5, 6.5)  # (x_min, x_max, y_min, y_max)
-        self.direction_scale_factors = [5, 0.1]
+        self.direction_scale_factors = [5, 10]
         self.distance_scale_factor = 100
         self.smooth_crash_threshold = 1.5
 
@@ -138,7 +138,7 @@ class SocialReward:
     def update_curriculum_level(self, level):
         self.curriculum_level = level
         self.logger.info(f"Reward system updated to curriculum level {self.curriculum_level}")
-        wandb.log({"reward_curriculum_level": self.curriculum_level})
+        # wandb.log({"reward_curriculum_level": self.curriculum_level})
 
     def get_total_reward(self):
         self.logger.info(f"Total reward: {self.to_point_rew}")
@@ -389,7 +389,6 @@ class SocialReward:
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         self.logger.info(f"Number of clusters detected: {n_clusters}")
         
-
         total_reward = 0
         for label in set(labels):
             if label == -1:

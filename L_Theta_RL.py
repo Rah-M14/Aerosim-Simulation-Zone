@@ -1,6 +1,7 @@
 import argparse
 import sys
 import os
+import pickle
 import glob
 import time
 import shutil
@@ -37,9 +38,9 @@ class SocEnv(gym.Env):
         img_context,
         headless,
         skip_frame=1,
-        physics_dt=1.0/30,
-        rendering_dt=1.0/60,
-        max_episode_length=1000,
+        physics_dt=1/4,
+        rendering_dt=1/4,
+        max_episode_length=200,
         seed=0,
     ) -> None:
         
@@ -71,6 +72,8 @@ class SocEnv(gym.Env):
         from ultralytics import YOLO
         from collections import deque
         from stable_baselines3 import PPO
+        import time
+        import math
 
         from omni.isaac.core import World, SimulationContext
         # from omni.isaac.core.scenes import Scene
@@ -79,6 +82,7 @@ class SocEnv(gym.Env):
         from omni.isaac.core.utils.extensions import enable_extension
         from omni.isaac.core.utils.nucleus import get_assets_root_path
         import omni.isaac.core.utils.numpy.rotations as rot_utils
+        # from omni.isaac.wheeled_robots.controllers.wheel_base_pose_controller import WheelBasePoseController
         # from omni.isaac.core.utils.stage import add_reference_to_stage
         # from omni.isaac.core.utils.prims import create_prim
         # from omni.isaac.core.utils.viewports import set_camera_view
@@ -91,6 +95,7 @@ class SocEnv(gym.Env):
 
         import omni.kit.viewport.utility
         from omni.isaac.nucleus import get_assets_root_path, is_file
+        from omni.isaac.core.utils.rotations import quat_to_euler_angles
         # import omni.replicator.core as rep
 
         EXTENSIONS_PEOPLE = [
@@ -115,7 +120,7 @@ class SocEnv(gym.Env):
         # import omni.anim.navigation.core as nav
         self.kit.update()
 
-        from New_RL_Bot_Control import RLBotController, RLBotAct
+        from New_RL_Bot_Control import RLBotController, RLBotAct, CustomWheelBasePoseController
         from New_RL_Bot import RLBot
         from Adv_SocRewards_Coll import SocialReward
         from Mod_Pegasus_App import PegasusApp
@@ -154,6 +159,7 @@ class SocEnv(gym.Env):
             self.kit.update()
         #print("Loading Complete")
 
+        self.headless = headless
         self.world = World(physics_dt=physics_dt, rendering_dt=rendering_dt, stage_units_in_meters=1.0)
         self.timeline = omni.timeline.get_timeline_interface() 
         self.world.initialize_physics()
@@ -163,8 +169,13 @@ class SocEnv(gym.Env):
 
         self.botname = botname
         self.bot = RLBot(simulation_app=self.kit, world=self.world, timeline=self.timeline, assets_root_path=self.assets_root_path, botname=self.botname)
-        self.controller = RLBotController(botname=self.botname)
-        self.act = RLBotAct(self.kit, self.bot.rl_bot, self.controller, n_steps=5)
+        self.core_controller = RLBotController(botname=self.botname)
+        self.controller = CustomWheelBasePoseController(name="cool_controller",
+                                                    open_loop_wheel_controller=self.core_controller,
+                                                    is_holonomic=False)
+        
+        self.act = RLBotAct(self.kit, self.bot.rl_bot, self.controller)
+        self.world.add_physics_callback("sending_actions", callback_fn=self.send_robot_actions)
         print("Bot Initialised!")
         inav = omni.anim.navigation.core.acquire_interface()
         print("Navmesh Created!") 
@@ -174,6 +185,8 @@ class SocEnv(gym.Env):
 
         # WORLD PARAMETERS
 
+        self.next_pos = None
+
         self.world_limits = np.array([20.0, 14.0])
         self.world_min_max = np.array([-10, -7, 10, 7]) # (min_x, min_y, max_x, max_y)
 
@@ -181,6 +194,7 @@ class SocEnv(gym.Env):
         self.carter_ang_vel_limits = np.array([np.pi, np.pi])
         self.state_normalize = state_normalize
         self.timestep = 0
+        self.total_timesteps = 0
 
         self.frame_num = 0
 
@@ -190,13 +204,14 @@ class SocEnv(gym.Env):
         self.max_velocity = 1.0
         self.max_angular_velocity = np.pi * 4
         self.act_steps = 5
+        self.pos_tol = 0.05 #Thiss tolerance should be greater than the position_tol in the controller
 
-        self.yolo_model = YOLO("yolov9t.pt")
+        self.yolo_model = YOLO("yolo11n.pt")
 
         # RL PARAMETERS
         self.seed(seed)
 
-        mlp_zeros = np.concatenate([np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(2), np.zeros(2), np.zeros(1)])
+        mlp_zeros = np.concatenate([np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(1)])
         self.mlp_context_frame_length = mlp_context
         self.img_context_frame_length = img_context
         self.mlp_context_frame = deque([mlp_zeros for _ in range(self.mlp_context_frame_length)], maxlen=self.mlp_context_frame_length)
@@ -204,12 +219,10 @@ class SocEnv(gym.Env):
         
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
-        self.action_space = spaces.Box(low=np.array([-1.0, -1.0]), high=np.array([2.5, 1.0]), shape=(2,), dtype=np.float32)
+        self.action_space = spaces.Box(low=np.array([-0.1, -(np.pi/4)]), high=np.array([1.5, (np.pi/4)]), shape=(2,), dtype=np.float32) #(l, theta)
         self.observation_space = spaces.Dict({
-            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 13), dtype=np.float32),
-            # 'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 12), dtype=np.float32),
+            'vector': spaces.Box(low=-np.inf, high=np.inf, shape=(self.mlp_context_frame_length, 9), dtype=np.float32),
             'image': spaces.Box(low=0, high=1, shape=(self.img_context_frame_length, 3, 64, 64), dtype=np.float32),
-            # 'camera_data': spaces.Box(low=0, high=255, shape=(255, 255, 3), dtype=np.uint8)
         })
 
         self.ep_steps = 0   
@@ -290,24 +303,17 @@ class SocEnv(gym.Env):
         self.timestep = np.array([0.0])
 
         self.bot.rl_bot.start_pose = self.bot.rl_bot.get_world_pose()
-        print(f"Start pose : {self.bot.rl_bot.start_pose}")
-        # self.bot.rl_bot.goal_pose = np.array([1.0, -4.0, 0.0])
+        if not self.headless:
+            print(f"Start pose : {self.bot.rl_bot.start_pose}")
         self.bot.rl_bot.goal_pose = self._gen_goal_pose()
-        print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
+        if not self.headless:
+            print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
 
-        state_goal_dist = np.linalg.norm(self.bot.rl_bot.goal_pose[:2] - self.bot.rl_bot.start_pose[0][:2])
-
-        # print(f"Start pose : {self.bot.rl_bot.start_pose[0][:2]}")
-        # print(f"Goal Pose: {self.bot.rl_bot.goal_pose[:2]}")
-        # print(f"State to goal Diist : {state_goal_dist}")
-        print(f"Current curriculum level: {self.curriculum_level}")
-        self.kit.update()
+        # state_goal_dist = np.linalg.norm(self.bot.rl_bot.goal_pose[:2] - self.bot.rl_bot.start_pose[0][:2])
 
         observations, _, _, _ = self.get_observations()
-        print(f"Observations: {observations['vector'][-1][:2]}")
-        # observations['vector'] = np.concatenate(observations['vector'])
         self.ep_steps = 0
-
+        
         self.logger.info(f"Episode {self.episode_count} started")
         wandb.log({"episode": self.episode_count})
         return observations
@@ -315,30 +321,18 @@ class SocEnv(gym.Env):
     def get_observations(self):
         self.world.render()
         bot_world_pos, bot_world_ori = self.bot.rl_bot.get_world_pose()
-        bot_lin_vel = self.bot.rl_bot.get_linear_velocity()
-        bot_ang_vel = self.bot.rl_bot.get_angular_velocity()
         goal_world_pos = self.bot.rl_bot.goal_pose
         timestep = self.timestep
-        if self.state_normalize == True:
-            # mlp_states = [bot_world_pos[:2]/self.world_limits,
-            #                     bot_world_ori / np.linalg.norm(bot_world_ori),
-            #                     bot_lin_vel[:2]/self.carter_vel_limits,
-            #                     bot_ang_vel[:2]/self.carter_ang_vel_limits,
-            #                     goal_world_pos[:2]/self.world_limits]
-            mlp_states = [bot_world_pos[:2]/self.world_limits,
-                                bot_world_ori / np.linalg.norm(bot_world_ori),
-                                bot_lin_vel[:2],
-                                bot_ang_vel[:2],
-                                goal_world_pos[:2]/self.world_limits,
-                                timestep/self.max_episode_length]
-        else:
-            mlp_states = [bot_world_pos[:2],
+        mlp_states_un = [bot_world_pos[:2],
                                 bot_world_ori,
-                                bot_lin_vel[:2],
-                                bot_ang_vel[:2],
                                 goal_world_pos[:2],
                                 timestep]
-            
+        if self.state_normalize == True:
+            mlp_states = [bot_world_pos[:2]/self.world_limits,
+                                bot_world_ori / np.linalg.norm(bot_world_ori),
+                                goal_world_pos[:2]/self.world_limits,
+                                timestep/self.max_episode_length]
+
         self.mlp_context_frame.append(np.concatenate(mlp_states))
         mlp_combined_context = self.get_mlp_combined_context()
         
@@ -349,7 +343,7 @@ class SocEnv(gym.Env):
             licam_image = np.zeros((3, 64, 64))
             img_combined_context = th.zeros((self.img_context_frame_length, 3, 64, 64))
         else:
-            li_cam_image = self.get_li_cam_image(lidar_data, camera_data, mlp_states, self.yolo_model, self.world_min_max, project_camera=True, image_size=64)
+            li_cam_image = self.get_li_cam_image(lidar_data, camera_data, mlp_states_un, self.yolo_model, self.world_min_max, project_camera=True, image_size=64)
             if self.timestep % 2 == 0:
                 self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
@@ -369,24 +363,41 @@ class SocEnv(gym.Env):
     def de_normalize_states(self, observation):
         return [observation[0] * self.world_limits,
                                 observation[1],
-                                observation[2],
-                                observation[3],
-                                observation[4] * self.world_limits]
+                                observation[2]*self.world_limits,
+                                observation[3]*self.max_episode_length]
 
-    def step(self, action): # action = [linear_velocity, angular_velocity] both between [-1,1]
-        prev_bot_pos, _ = self.bot.rl_bot.get_world_pose()
+    def next_coords(self, actions, position):
+        l, theta = actions
+        return np.array([(position[0] + np.sin(theta)*l),(position[1] + np.cos(theta)*l), 0.0])
+    
+    def send_robot_actions(self, step_size):
+        if self.next_pos is not None:
+            position, orientation = self.bot.rl_bot.get_world_pose()
+            self.act.send_actions(start_pos=position, start_ori=orientation, goal_pos=self.next_pos)
+            return
+
+    def step(self, action): # action = [l, theta], l in [-0.1, 1.5] and theta in [-pi/4, pi/4]
+        prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         self.timestep += 1.0
+        self.total_timesteps += 1
+        
+        self.next_pos = self.next_coords(action, prev_bot_pos)
+        self.world.step()
 
-        lin_vel = action[0] * self.max_velocity
-        ang_vel = action[1] * self.max_angular_velocity
-
-        self.act.move_bot(vals=np.array([lin_vel, ang_vel]))
-
-        for _ in range(self.act_steps):
-            self.kit.update()
+        # tmp_t = 0
+        # max_t = 200
+        # print("about to enter the while loop")
+        # start_t = time.time()
+        while True:
             self.world.step()
-        self.act.stop_bot()
-        self.kit.update()
+            if self.controller.goal_reached:
+                break
+        # cur_pos, _ = self.bot.rl_bot.get_world_pose()
+        # print(f"the distance moved now is : {np.linalg.norm(cur_pos-prev_bot_pos)}")
+
+        # end_t = time.time()
+        # diff_t = end_t-start_t
+        # print(f"Out of the while loop, spent a time of {diff_t} seconds")
         
         self.ep_steps += 1
 
@@ -398,7 +409,7 @@ class SocEnv(gym.Env):
         self.info['lidar_data'] = lidar_data
         self.info['camera_data'] = camera_data
 
-        reward, to_point_rew, reward_dict, ep_rew_dict = self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-1], lidar_data)
+        reward, to_point_rew, reward_dict, ep_rew_dict = self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-2], lidar_data)
         done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[-1])
         if done:
             if done_reason == "timeout":
@@ -415,12 +426,14 @@ class SocEnv(gym.Env):
 
         self.logger.info(f"Step: action={action}, reward={reward}, done={done}")
         wandb.log({
-            'Action_lin_vel' : action[0],
-            'Action_ang_vel' : action[1],
+            'L' : action[0],
+            'Theta' : action[1],
             "step_reward": reward,
             "to_point_reward": to_point_rew,
+            "step_total_timesteps": self.total_timesteps
         })
         wandb.log(self.reward_manager.ep_reward_dict)
+
         return observations, reward, done, self.info
 
     def is_terminated(self, cur_bot_pos, goal_pos):
@@ -496,44 +509,6 @@ class SocEnv(gym.Env):
             [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x*x - 2*y*y]
         ])
 
-# TEST PURPOSE CODE
-# def run_episode(my_env):
-#     lidar_dir = '/home/rah_m/new_lidar_data/new8/lidar_data'
-#     camera_dir = '/home/rah_m/new_lidar_data/new8/camera_data'
-
-#     for directory in [lidar_dir, camera_dir]:
-#         if os.path.exists(directory):
-#             shutil.rmtree(directory)
-#         os.makedirs(directory)
-
-#     for _ in range(20):
-#         obs = my_env.reset()
-#         done = False
-#         total_rew = 0
-#         i = 0
-#         while i < my_env.max_episode_length:
-#             if i % 1 == 0:
-#                 actions = np.clip(np.random.uniform(-1, 1, 2), -1.0, 1.0)
-#                 print(f"stepping at {i} with actions {actions}")
-#                 obs, reward, done, info = my_env.step(actions)
-#                 pos, ori = my_env.bot.rl_bot.get_world_pose()
-#                 lidar_data = info['lidar_data']
-#                 camera_data = info['camera_data']
-#                 print(f"Lidar Data Shape: {lidar_data.shape}")
-#                 print(f"Camera Data Shape: {camera_data.shape}")
-
-#                 my_env.render()
-#                 my_env.kit.update()
-
-#                 np.save(f'{lidar_dir}/lidar_data_{i}_{pos}_{ori}.npy', lidar_data)
-#                 np.save(f'{camera_dir}/camera_data_{i}_{pos}_{ori}.npy', camera_data)
-#             my_env.kit.update()
-#             if done:
-#                 break
-#             i += 1
-#         # print(f"Episode Done with Reward: {my_env.reward_manager.get_total_reward()}")
-#         break
-
 def animated_loading():
     chars = ['.', '..', '...']
     for char in chars:
@@ -543,7 +518,7 @@ def animated_loading():
         time.sleep(0.5)
 
 class BestModelCallback(BaseCallback):
-    def __init__(self, algo, save_path, save_replay_buffer=True, freq=20000, verbose=0):
+    def __init__(self, algo, save_path, save_replay_buffer=True, freq=5000, verbose=0):
         super(BestModelCallback, self).__init__(verbose)
         self.algo = algo.upper()
         self.save_path = save_path
@@ -552,11 +527,10 @@ class BestModelCallback(BaseCallback):
         self.freq = freq
 
     def _on_step(self) -> bool:
+        rewards = [ep_info['r'] for ep_info in self.model.ep_info_buffer]
+        mean_reward = np.mean(rewards)
         if self.n_calls % 1000 == 0:
             if self.model.ep_info_buffer and len(self.model.ep_info_buffer) > 0:
-                rewards = [ep_info['r'] for ep_info in self.model.ep_info_buffer]
-                mean_reward = np.mean(rewards)
-                
                 if mean_reward > self.best_mean_reward:
                     self.best_mean_reward = mean_reward
                     path = os.path.join(self.save_path, f"best_SocNav_{self.algo}_ckpt.zip")
@@ -581,6 +555,12 @@ class BestModelCallback(BaseCallback):
         if self.n_calls % self.freq == 0:
             gen_path = os.path.join(self.save_path, f"SocNav_{self.algo}_{self.n_calls}_ckpt.zip")
             self.model.save(gen_path)
+
+            replay_buffer_path = os.path.join(self.save_path, f"Latest_SocNav_{self.algo}_Replay_Buffer.pkl")
+            self.model.save_replay_buffer(replay_buffer_path)
+            if self.verbose > 1:
+                print(f"Saving model replay buffer checkpoint to {replay_buffer_path}")
+
             metadata = {
                         'mean_reward': float(mean_reward),
                         'timestamp': time.time()
@@ -614,13 +594,13 @@ class WandbCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         self.step_count += 1
-        if self.step_count % 100 == 0:
+        if self.step_count % 20 == 0:
             log_data = {
-                "total_timesteps": self.num_timesteps,
+                "callback_total_timesteps": self.step_count,
                 "learning_rate": self.model.learning_rate,
             }
             wandb.log(log_data)
-            animated_loading()
+            # animated_loading()
         return True
     
 class GradientAccumulationCallback(BaseCallback):
@@ -654,11 +634,13 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         self.mlp_context = mlp_context
         self.img_context = img_context
         self.img_channels = 3
+        self.vec_lstm_out_size = 32
+        self.img_lstm_out_size = 128
         self.n_flatten_size = 256
 
         self.device = device
 
-        self.vec_lstm = nn.LSTM(13, 64, num_layers=1)
+        self.vec_lstm = nn.LSTM(9, self.vec_lstm_out_size, num_layers=1)
         self.img_cnn = nn.Sequential(
             nn.Conv2d(self.img_channels, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
@@ -673,21 +655,21 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
             nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
             nn.ReLU(),
             nn.Flatten())
-        self.img_lstm = nn.LSTM(self.n_flatten_size, 128, num_layers=2)
+        self.img_lstm = nn.LSTM(self.n_flatten_size, self.img_lstm_out_size, num_layers=2)
 
         total_concat_size = 0
         for key, subspace in observation_space.spaces.items():
             if algo == "ppo":
                 if key == "vector":
-                    total_concat_size += 64
+                    total_concat_size += self.vec_lstm_out_size
                 elif key == "image":
-                    total_concat_size += 128
+                    total_concat_size += self.img_lstm_out_size
 
             elif algo == 'sac':
                 if key == "vector":
-                    total_concat_size += 64
+                    total_concat_size += self.vec_lstm_out_size
                 elif key == "image":
-                    total_concat_size += 128
+                    total_concat_size += self.img_lstm_out_size
 
         self._features_dim = total_concat_size
 
@@ -701,7 +683,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     lstm_out = self.vec_lstm(core_in)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
                 else:
-                    core_in = observations[key].view(self.mlp_context, -1, 13).to(self.device)
+                    core_in = observations[key].view(self.mlp_context, -1, 9).to(self.device)
                     lstm_out = self.vec_lstm(core_in)[1][0]
                     encoded_tensor_list.append(lstm_out[-1])
 
@@ -716,17 +698,12 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
                     batch_size = core_in.shape[0]
                     mini_batch_size = 32
                     num_mini_batches = batch_size//mini_batch_size
-                    # print(f"Core In Shape: {core_in.shape}")
                     core_in = core_in.view(num_mini_batches, mini_batch_size, -1, 3, 64, 64)
-                    # print(f"New Core In Shape: {core_in.shape}")
 
                     core_out_n = []
                     for i in range(num_mini_batches):
-                        # print(f"Mini batch number : {i}")
                         cnn_out = self.img_cnn(core_in[i].view(-1, 3, 64, 64))
-                        # print(f"Cnn Out Shape: {cnn_out.shape}")
                         core_out_n.append(cnn_out.view(mini_batch_size, self.img_context, 256).swapaxes(0,1))
-                        # print(f"Core Out Shape: {core_out_n[-1].shape}")
 
                     core_out = th.cat(core_out_n, dim=1)
 
@@ -757,6 +734,15 @@ def get_checkpoint(algo: str, ckpt_dir: str, best: bool = True):
     else:
         return max(checkpoints, key=os.path.getctime)
 
+def load_model_and_replay_buffer(algo, model, my_env, ckpt_path, replay_buffer_path=None):
+    model.load(ckpt_path, env=my_env)
+    if replay_buffer_path and os.path.exists(replay_buffer_path):
+        with open(replay_buffer_path, 'rb') as f:
+            model.replay_buffer = pickle.load(f)
+        print(f"Replay buffer loaded from {replay_buffer_path}")
+
+    return model
+
 def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
     if algo.lower() == 'ppo':
         return PPO(
@@ -766,11 +752,11 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 verbose=1,
                 n_steps=2048,
                 batch_size=256,
-                learning_rate=5e-4,
+                learning_rate=3e-4,
                 gamma=0.99,
                 ent_coef=0.1,
                 clip_range=0.3,
-                n_epochs=10,
+                n_epochs=20,
                 device="cuda",
                 gae_lambda=1.0,
                 max_grad_norm=0.9,
@@ -784,8 +770,8 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 my_env,
                 policy_kwargs=policy_kwargs,
                 verbose=1,
-                buffer_size=100,
-                learning_rate=1e-4,
+                buffer_size=10000,
+                learning_rate=3e-4,
                 gamma=0.99,
                 batch_size=512,
                 tau=0.005,
@@ -808,7 +794,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use')
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
-    parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='best', help='Choose the checkpoint to resume from')
+    parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='latest', help='Choose the checkpoint to resume from')
     parser.add_argument('--ckpt_path', type=str, default=None, help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=32, help='Length of the MLP context')
     parser.add_argument('--img_context', type=int, default=16, help='Length of the image Context')
@@ -847,17 +833,18 @@ def main():
 
             if args.resume_checkpoint:
                 print(f"Checkpoint to load: {checkpoint_to_load}")
-                model = model.load(checkpoint_to_load, env=my_env)
+                rep_buf_path = os.path.join(f"{os.sep}".join(checkpoint_to_load.split('/')[:-1]),f"best_SocNav_{args.algo.upper()}_Replay_Buffer.pkl")
+                model = load_model_and_replay_buffer(algo=args.algo, model=model, my_env=my_env, ckpt_path=checkpoint_to_load, replay_buffer_path=rep_buf_path)
             else:
                 print("No Checkpoint Loading!!!")
 
-            checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=2000, save_path=ckpt_log_dir, 
+            checkpoint_callback = IncrementalCheckpointCallback(algo=args.algo, save_freq=200, save_path=ckpt_log_dir, 
                                                                 name_prefix=f"SocNav_{args.algo.upper()}_ckpt")
             wandb_callback = WandbCallback(algo=args.algo)
             best_model_callback = BestModelCallback(algo=args.algo, save_path=os.path.join(ckpt_log_dir, f"{args.algo.upper()}_{checkpoint_callback.run_number}_ckpts"))
             gradient_accumulation_callback = GradientAccumulationCallback(n_accumulate=4)
             eval_callback = EvalCallback(my_env, best_model_save_path=os.path.join(ckpt_log_dir,"Eval_Best_Model"),
-                             log_path=os.path.join(ckpt_log_dir, "Eval_Logs"), eval_freq=1,
+                             log_path=os.path.join(ckpt_log_dir, "Eval_Logs"), eval_freq=5000, n_eval_episodes=5,
                              deterministic=True, render=False)
             # mixed_precision_callback = MixedPrecisionCallback()
             model.learn(total_timesteps=500000000, progress_bar=True, callback=[checkpoint_callback, best_model_callback, eval_callback, wandb_callback, gradient_accumulation_callback])

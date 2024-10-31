@@ -71,3 +71,74 @@ class RLBotAct():
     def stop_bot(self):
         self.bot.apply_wheel_actions(self.controller.forward(np.array([0.0, 0.0])))
         return None
+    
+    def send_actions(self, start_pos, start_ori, goal_pos):
+        self.bot.apply_action(self.controller.forward(start_position=start_pos,
+                                                        start_orientation=start_ori,
+                                                        goal_position=goal_pos,
+                                                        lateral_velocity=0.2,
+                                                        yaw_velocity=2.5,
+                                                        heading_tol=5,
+                                                        position_tol=0.1))
+        return None
+
+import math
+
+import numpy as np
+from omni.isaac.core.controllers.base_controller import BaseController
+from omni.isaac.core.utils.rotations import quat_to_euler_angles
+from omni.isaac.core.utils.types import ArticulationAction
+
+
+class CustomWheelBasePoseController(BaseController):
+    def __init__(self, name: str, open_loop_wheel_controller: BaseController, is_holonomic: bool = False) -> None:
+        super().__init__(name)
+        self._open_loop_wheel_controller = open_loop_wheel_controller
+        self._is_holonomic = is_holonomic
+        self.goal_reached = False
+        # self.i = 0
+        return
+
+    def forward(
+        self,
+        start_position: np.ndarray,
+        start_orientation: np.ndarray,
+        goal_position: np.ndarray,
+        lateral_velocity: float = 1.0,
+        yaw_velocity: float = 2.5,
+        heading_tol: float = 5,
+        position_tol: float = 0.04,
+    ) -> ArticulationAction:
+        self.goal_reached = False
+        # self.i += 1
+        # print(f"Forward is called")
+        
+        _, _, current_yaw = np.rad2deg(quat_to_euler_angles(start_orientation))
+
+        # Calculate desired heading (degrees)
+        delta_x = goal_position[0] - start_position[0]
+        delta_y = goal_position[1] - start_position[1]
+        desired_heading = np.rad2deg(np.arctan2(delta_y, delta_x))
+
+        # Calculate angle error (degrees)
+        angle_error = (desired_heading - current_yaw + 180) % 360 - 180
+
+        # Calculate distance to goal
+        dist_to_goal = np.linalg.norm(start_position[:2] - goal_position[:2])
+
+        # Determine command based on angle error and distance
+        if dist_to_goal < position_tol:
+            command = [0.0, 0.0]  # Stop if within position tolerance
+            self.goal_reached = True
+        elif dist_to_goal < position_tol*5:
+            command = [lateral_velocity/2, 0]
+        elif np.abs(angle_error) > heading_tol:
+            command = [0.0, yaw_velocity if angle_error > 0 else -yaw_velocity]
+        else:
+            command = [lateral_velocity, 0.0]
+
+        return self._open_loop_wheel_controller.forward(command)
+    
+    def reset(self) -> None:
+        """[summary]"""
+        return

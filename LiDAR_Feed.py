@@ -31,6 +31,7 @@ def transform_fov_polygon_to_world(fov_polygon, bot_pos_r, R):
         # Translate by robot's position in world frame
         world_point = rotated_point[:2] + bot_pos_r[:2]
         transformed_coords.append(world_point)
+    transformed_coords = np.array(transformed_coords)
     return Polygon(transformed_coords)
 
 def extract_bounding_boxes(yolo_model, frame):
@@ -180,6 +181,8 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
         return None, None
     pos = mlp_obs[0]
     ori = mlp_obs[1]
+    goal_pos = mlp_obs[-2]
+
     quat_matrix = quaternion_to_rotation_matrix(ori)
     rotated_data = np.dot(lidar_data[:, :2], quat_matrix[:2, :2].T)
     world_data = rotated_data + pos
@@ -206,11 +209,6 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
     ]
     clustering_model = KMeans(n_clusters=len(bounding_boxes) if len(bounding_boxes) > 0 else 1)
 
-    # print("Clustering model: ", clustering_model)
-    # print(f"len bounding boxes: {len(bounding_boxes)}")
-    # # print(f"len lidar points: {len(lidar_points)}")
-    # print(f"lidar shape is: {lidar_points.shape}")
-    # print(f"lidar size is: {lidar_points.size}")
     if lidar_points.shape[0] < len(bounding_boxes):
         return np.zeros((3, image_size, image_size), dtype=np.uint8) / 255.0
     else:
@@ -248,12 +246,16 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
     normalized_pos = (pos[:2] - world_min_max[:2]) / (
         world_min_max[2:] - world_min_max[:2]
     )
+    normalized_goal = (goal_pos[:2] - world_min_max[:2]) / (
+        world_min_max[2:] - world_min_max[:2]
+    )
     # Create a blank image
     image = np.zeros((image_size, image_size, 3), dtype=np.uint8)
     # Convert world_data and lidar_points to pixel coordinates
     pixel_coords = (world_data * (image_size - 1)).astype(int)
     lidar_pixel_coords = (lidar_points * (image_size - 1)).astype(int)
     bot_pixel = (normalized_pos * (image_size - 1)).astype(int)
+    goal_pixel = (normalized_goal * (image_size - 1)).astype(int)
     # Filter valid pixels (those inside image bounds)
     valid_pixels = (
         (pixel_coords[:, 0] >= 0)
@@ -268,6 +270,7 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
         "person": [0, 255, 0],  # Green
         "on camera_other": [0, 0, 255],  # Blue
         "bot": [255, 255, 255],  # White for bot
+        "goal": [255, 255, 0] # Yellow for Goal
     }
     # Assign default color (red) to all valid points
     image[valid_pixel_coords[:, 1], valid_pixel_coords[:, 0]] = label_color_map[
@@ -300,6 +303,16 @@ def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max
         "bot"
     ]  # White square for bot
 
+    goal_x, goal_y = goal_pixel
+    image[
+        max(0, int(goal_y) - bot_size) : min(image_size, int(goal_y) + bot_size + 1),
+        max(0, int(goal_x) - bot_size) : min(image_size, int(goal_x) + bot_size + 1),
+    ] = label_color_map[
+        "goal"
+    ]  # Yellow Square for Goal
+
+    # np.save("/home/rah_m/TEST/Sample_image.npy",image)
+    
     image = np.swapaxes(image,0,-1)
     
     return image/255.0

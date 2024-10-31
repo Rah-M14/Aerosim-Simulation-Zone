@@ -15,7 +15,7 @@ import numpy as np
 import random
 
 class RLBot():
-    def __init__(self, simulation_app, world, timeline, assets_root_path, botname):
+    def __init__(self, simulation_app, world, botname, timeline=None, assets_root_path=None):
 
         if botname.lower() == "carter":
             self.kit = simulation_app
@@ -97,8 +97,8 @@ class RLBot():
             # JACKAL CAMERA
             self.rl_bot_camera = Camera(prim_path="/World/jackal/base_link/bumblebee_stereo_camera_frame/bumblebee_stereo_left_frame/bumblebee_stereo_left_camera",
                                         name='Jackal_Camera',
-                                        frequency=30,
-                                        resolution=(512,512))
+                                        frequency=1/4,
+                                        resolution=(256,256))
             self.rl_bot_camera.initialize()
             self.kit.update()
             self.rl_bot_camera.initialize()
@@ -124,6 +124,8 @@ class RLBot():
             writer = rep.writers.get("RtxLidarDebugDrawPointCloudBuffer")
             writer.attach(render_product)
 
+            self.dbscan = DBSCAN(eps=0.5, min_samples=5)
+            
         elif botname.lower() == "nova_carter":
                 
             self.kit = simulation_app
@@ -179,12 +181,10 @@ class RLBot():
             writer.attach(render_product)
 
     def _get_lidar_data(self):
-        self.kit.update()
         self.timeline.pause()
         rep.orchestrator.step()
         self.rl_bot_lidar.data = self.rl_bot_lidar.annotator.get_data()
         self.timeline.play()
-        self.kit.update()
         return self.rl_bot_lidar.data['data']
 
     def get_denoised_lidar_data(self):
@@ -204,8 +204,7 @@ class RLBot():
         smoothed_cloud = np.apply_along_axis(lambda x: signal.medfilt(x, kernel_size=window_size), 0, point_cloud)
 
         if smoothed_cloud.shape[0] > 5:
-            dbscan = DBSCAN(eps=0.5, min_samples=5)
-            clusters = dbscan.fit_predict(smoothed_cloud)
+            clusters = self.dbscan.fit_predict(smoothed_cloud)
             denoised_cloud = smoothed_cloud[clusters != -1]
         else:
             denoised_cloud = smoothed_cloud

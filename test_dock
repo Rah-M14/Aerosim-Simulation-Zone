@@ -1,0 +1,17 @@
+FROM nvcr.io/nvidia/isaac-sim:4.1.0 as isaac-sim
+
+WORKDIR /isaac-sim
+
+RUN ln -s exts/omni.isaac.examples/omni/isaac/examples extension_examples
+
+COPY . /app
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY .
+
+EXPOSE 80
+
+CMD ["python", "L_Theta_RL.py"]
