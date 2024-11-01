@@ -40,6 +40,6 @@ RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.ki
 
 EXPOSE 80
 
-CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/L_Theta_RL.py", "--algo", "ppo", "--botname", "jackal", "--headless", "--state_normalize" ]
+CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/Docker_Trainer.py", "--algo", "ppo", "--botname", "jackal", "--headless", "--state_normalize" ]
 
 # sudo docker build --build-arg WAPI_KEY=$WANDB_API -t isaac_build .
