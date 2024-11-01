@@ -28,10 +28,12 @@ RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git
 RUN cd ./PegasusSimulator/extensions && \
     /isaac-sim/python.sh -m pip install --editable pegasus.simulator
 
+RUN cd /isaac-sim
+
 RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
     ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn
 
-RUN wandb login $WANDB_API_KEY
+RUN ./python.sh -m wandb login $WANDB_API_KEY
 
 RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
     mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
