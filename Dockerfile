@@ -4,34 +4,39 @@ WORKDIR /isaac-sim
 
 RUN ln -s exts/omni.isaac.examples/omni/isaac/examples extension_examples
 
-COPY . /app
+COPY . /isaac-sim/
 
-WORKDIR /app
+ENV WANDB_API_KEY=$(WANDB_API)
 
-# Install Python 3.10 and set it as the default
+# WORKDIR /app
+
+# # Install Python 3.10 and set it as the default
 RUN apt-get update && \
-    apt-get install -y python3.10 python3.10-dev python3.10-distutils && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
+    apt-get -y install git && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
+    # apt-get install -y python3.10 python3.10-dev python3.10-distutils git && \
+#     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
+#     apt-get clean && \
+#     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 
-WORKDIR /isaac-sim
+# WORKDIR /isaac-sim
 
-RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt
+RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git
 
-RUN ./python.sh -m pip install torch torchvision torchaudio
-RUN ./python.sh -m pip install wandb
-RUN ./python.sh -m pip install stable-baselines3[extra]
-RUN ./python.sh -m pip install gym
-RUN ./python.sh -m pip install ultralytics
-RUN ./python.sh -m pip install scikit-learn
+RUN cd ./PegasusSimulator/extensions && \
+    /isaac-sim/python.sh -m pip install --editable pegasus.simulator
 
-RUN mv /app/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
-    mv /app/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
-    mv /app/SIM_Files /isaac-sim/standalone_examples/api/omni.isaac.kit 
+RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
+    ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn
+
+RUN wandb login $WANDB_API_KEY
+
+RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
+    mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
+    mv /isaac-sim/SIM_Files /isaac-sim/standalone_examples/api/omni.isaac.kit 
 
 EXPOSE 80
 
-CMD ["python3.10", "/isaac-sim/standalone_examples/api/omni.isaac.kit/L_Theta_RL.py"]
+CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/L_Theta_RL.py", "--algo", "ppo", "--botname", "jackal", "--headless", "--state_normalize" ]
