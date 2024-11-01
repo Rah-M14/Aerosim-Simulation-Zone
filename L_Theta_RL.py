@@ -132,6 +132,7 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
+        print("The error is here!!!!!")
         current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         usd_path = self.assets_root_path + current_world_usd
 

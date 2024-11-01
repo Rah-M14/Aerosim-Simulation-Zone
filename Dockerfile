@@ -17,10 +17,16 @@ RUN apt-get update && \
 
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 
-RUN pip3 install --no-cache-dir -r requirements.txt
+WORKDIR /isaac-sim
 
-RUN pip3 install torch torchvision torchaudio
-RUN pip3 install wandb
+RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt
+
+RUN ./python.sh -m pip install torch torchvision torchaudio
+RUN ./python.sh -m pip install wandb
+RUN ./python.sh -m pip install stable-baselines3[extra]
+RUN ./python.sh -m pip install gym
+RUN ./python.sh -m pip install ultralytics
+RUN ./python.sh -m pip install scikit-learn
 
 RUN mv /app/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
     mv /app/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \

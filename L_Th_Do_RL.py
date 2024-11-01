@@ -1,6 +1,7 @@
 import argparse
 import sys
 import os
+import pickle
 import glob
 import time
 import shutil
@@ -37,9 +38,9 @@ class SocEnv(gym.Env):
         img_context,
         headless,
         skip_frame=1,
-        physics_dt=1.0/30,
-        rendering_dt=1.0/60,
-        max_episode_length=150,
+        physics_dt=1/4,
+        rendering_dt=1/4,
+        max_episode_length=200,
         seed=0,
     ) -> None:
         
@@ -63,7 +64,6 @@ class SocEnv(gym.Env):
         self._steps_after_reset = int(rendering_dt / physics_dt)
         
         import omni
-        import carb.settings
         import matplotlib.pyplot as plt
         # from gymnasium import spaces
         import torch as th
@@ -117,9 +117,6 @@ class SocEnv(gym.Env):
         for ext_people in EXTENSIONS_PEOPLE:
             enable_extension(ext_people)
 
-        settings = carb.settings.get_settings()
-        settings.set("/renderer/multiGPU/enabled", True)
-
         # import omni.anim.navigation.core as nav
         self.kit.update()
 
@@ -135,6 +132,7 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
+        print("The error is here!!!!!")
         current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         usd_path = self.assets_root_path + current_world_usd
 
@@ -209,7 +207,7 @@ class SocEnv(gym.Env):
         self.act_steps = 5
         self.pos_tol = 0.05 #Thiss tolerance should be greater than the position_tol in the controller
 
-        self.yolo_model = YOLO("yolov9t.pt")
+        self.yolo_model = YOLO("yolo11n.pt")
 
         # RL PARAMETERS
         self.seed(seed)
@@ -313,7 +311,6 @@ class SocEnv(gym.Env):
             print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
 
         # state_goal_dist = np.linalg.norm(self.bot.rl_bot.goal_pose[:2] - self.bot.rl_bot.start_pose[0][:2])
-        self.kit.update()
 
         observations, _, _, _ = self.get_observations()
         self.ep_steps = 0
@@ -380,33 +377,25 @@ class SocEnv(gym.Env):
             self.act.send_actions(start_pos=position, start_ori=orientation, goal_pos=self.next_pos)
             return
 
-    def step(self, action): # action = [l, theta], l in [-0.1, 0.5] and theta in [-pi/4, pi/4]
+    def step(self, action): # action = [l, theta], l in [-0.1, 1.5] and theta in [-pi/4, pi/4]
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         self.timestep += 1.0
         self.total_timesteps += 1
         
         self.next_pos = self.next_coords(action, prev_bot_pos)
-        self.act.send_actions(start_pos=prev_bot_pos, start_ori=prev_bot_ori, goal_pos=self.next_pos)
+        self.world.step()
 
-        tmp_t = 0
-        max_t = 200
+        # tmp_t = 0
+        # max_t = 200
         # print("about to enter the while loop")
         # start_t = time.time()
         while True:
-            tmp_t += 1
             self.world.step()
-            # self.kit.update()
-            # print(f"Just stepped in : {tmp_t}")
             if self.controller.goal_reached:
-                # print("Goal reached!")
                 break
-            
+        # cur_pos, _ = self.bot.rl_bot.get_world_pose()
+        # print(f"the distance moved now is : {np.linalg.norm(cur_pos-prev_bot_pos)}")
 
-            # curr_bot_pos, curr_bot_ori = self.bot.rl_bot.get_world_pose()
-            # self.act.send_actions(start_pos=curr_bot_pos, start_ori=curr_bot_ori, goal_pos=self.next_pos)
-            # if tmp_t >= max_t:
-            #     print("While timed out")
-            #     break
         # end_t = time.time()
         # diff_t = end_t-start_t
         # print(f"Out of the while loop, spent a time of {diff_t} seconds")
@@ -567,6 +556,12 @@ class BestModelCallback(BaseCallback):
         if self.n_calls % self.freq == 0:
             gen_path = os.path.join(self.save_path, f"SocNav_{self.algo}_{self.n_calls}_ckpt.zip")
             self.model.save(gen_path)
+
+            replay_buffer_path = os.path.join(self.save_path, f"Latest_SocNav_{self.algo}_Replay_Buffer.pkl")
+            self.model.save_replay_buffer(replay_buffer_path)
+            if self.verbose > 1:
+                print(f"Saving model replay buffer checkpoint to {replay_buffer_path}")
+
             metadata = {
                         'mean_reward': float(mean_reward),
                         'timestamp': time.time()
@@ -606,7 +601,7 @@ class WandbCallback(BaseCallback):
                 "learning_rate": self.model.learning_rate,
             }
             wandb.log(log_data)
-            animated_loading()
+            # animated_loading()
         return True
     
 class GradientAccumulationCallback(BaseCallback):
@@ -740,6 +735,15 @@ def get_checkpoint(algo: str, ckpt_dir: str, best: bool = True):
     else:
         return max(checkpoints, key=os.path.getctime)
 
+def load_model_and_replay_buffer(algo, model, my_env, ckpt_path, replay_buffer_path=None):
+    model.load(ckpt_path, env=my_env)
+    if replay_buffer_path and os.path.exists(replay_buffer_path):
+        with open(replay_buffer_path, 'rb') as f:
+            model.replay_buffer = pickle.load(f)
+        print(f"Replay buffer loaded from {replay_buffer_path}")
+
+    return model
+
 def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
     if algo.lower() == 'ppo':
         return PPO(
@@ -791,7 +795,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use')
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
-    parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='best', help='Choose the checkpoint to resume from')
+    parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='latest', help='Choose the checkpoint to resume from')
     parser.add_argument('--ckpt_path', type=str, default=None, help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=32, help='Length of the MLP context')
     parser.add_argument('--img_context', type=int, default=16, help='Length of the image Context')
@@ -802,7 +806,7 @@ def main():
 
     try:
         with wandb.init(project="Mod_Isaac_Soc_Nav", name=f"{args.algo.upper()}_training") as run:
-            log_dir = "/home/rah_m/Fresh_SocNav_Logs"
+            log_dir = "/isaac-sim/SocNav_Logs"
             ckpt_log_dir = os.path.join(log_dir, "Checkpoints")
             tensor_log_dir = os.path.join(log_dir, "Tensorboard")
             os.makedirs(ckpt_log_dir, exist_ok=True)
@@ -830,7 +834,8 @@ def main():
 
             if args.resume_checkpoint:
                 print(f"Checkpoint to load: {checkpoint_to_load}")
-                model = model.load(checkpoint_to_load, env=my_env)
+                rep_buf_path = os.path.join(f"{os.sep}".join(checkpoint_to_load.split('/')[:-1]),f"best_SocNav_{args.algo.upper()}_Replay_Buffer.pkl")
+                model = load_model_and_replay_buffer(algo=args.algo, model=model, my_env=my_env, ckpt_path=checkpoint_to_load, replay_buffer_path=rep_buf_path)
             else:
                 print("No Checkpoint Loading!!!")
 
