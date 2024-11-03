@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/isaac-sim:4.1.0 AS isaac-sim
+FROM nvcr.io/nvidia/isaac-sim:4.2.0 AS isaac-sim
 
 WORKDIR /isaac-sim
 
@@ -21,6 +21,11 @@ RUN apt-get update && \
 
 WORKDIR /isaac-sim
 
+RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt
+RUN ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn shapely
+   
+WORKDIR /isaac-sim/standalone_examples/api/omni.isaac.kit/
+
 RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git
 
 RUN cd ./PegasusSimulator/extensions && \
@@ -29,14 +34,11 @@ RUN cd ./PegasusSimulator/extensions && \
 
 WORKDIR /isaac-sim
 
-RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt
-RUN ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn
-
 RUN ./python.sh -m wandb login $WANDB_API_KEY
 
 RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
     mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
-    mv /isaac-sim/SIM_Files /isaac-sim/standalone_examples/api/omni.isaac.kit 
+    mv /isaac-sim/Final_WR_World /isaac-sim/standalone_examples/api/omni.isaac.kit 
 
 EXPOSE 80
 

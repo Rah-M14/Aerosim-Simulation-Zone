@@ -132,8 +132,10 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
-        current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
-        usd_path = self.assets_root_path + current_world_usd
+        # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
+        # usd_path = self.assets_root_path + current_world_usd
+
+        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -146,7 +148,7 @@ class SocEnv(gym.Env):
             # self.scene = UsdPhysics.Scene.Define(self.stage, "/physicsScene")
         else:
             carb.log_error(
-                f"the usd path {usd_path} could not be opened, please make sure that {current_world_usd} is a valid usd file in {self.assets_root_path}"
+                f"the usd path {usd_path} could not be opened, please make sure that {usd_path} is a valid usd file in {self.assets_root_path}"
             )
             self.kit.close()
             sys.exit()
@@ -372,12 +374,24 @@ class SocEnv(gym.Env):
     
     def send_robot_actions(self, step_size):
         if self.next_pos is not None:
-            position, orientation = self.bot.rl_bot.get_world_pose()
-            self.act.send_actions(start_pos=position, start_ori=orientation, goal_pos=self.next_pos)
-            return
+            try:
+                position, orientation = self.bot.rl_bot.get_world_pose()
+                self.act.send_actions(start_pos=position, start_ori=orientation, goal_pos=self.next_pos)
+            except Exception as e:
+                print(f"Warning in send bot actions: Failed to get robot pose: {e}")
+                # Reset simulation if needed
+                self.world.reset()
+                self.kit.update()
+                return
 
     def step(self, action): # action = [l, theta], l in [-0.1, 1.5] and theta in [-pi/4, pi/4]
         wandb.log({"while timeout": 0})
+        try:
+            prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
+        except Exception as e:
+            print(f"Warning in step: Failed to get initial robot pose: {e}")
+            # Return a failed state
+            return self.get_observations()[0], self.reward_manager.timeout_penalty, True, {}
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         self.timestep += 1.0
         self.total_timesteps += 1
@@ -804,6 +818,7 @@ def main():
     parser.add_argument('--algo', type=str, choices=['ppo', 'sac'], default='ppo', help='RL algorithm to use')
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
     parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='latest', help='Choose the checkpoint to resume from')
+    parser.add_argument('--storage_path', type=str, default="/data/SocNav_Logs", help='Choose the path to store teh logs and ckpts')
     parser.add_argument('--ckpt_path', type=str, default=None, help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=32, help='Length of the MLP context')
     parser.add_argument('--img_context', type=int, default=16, help='Length of the image Context')
@@ -814,7 +829,7 @@ def main():
 
     try:
         with wandb.init(project="Mod_Isaac_Soc_Nav", name=f"{args.algo.upper()}_training") as run:
-            log_dir = "/isaac-sim/SocNav_Logs"
+            log_dir = args.storage_path
             ckpt_log_dir = os.path.join(log_dir, "Checkpoints")
             tensor_log_dir = os.path.join(log_dir, "Tensorboard")
             os.makedirs(ckpt_log_dir, exist_ok=True)
