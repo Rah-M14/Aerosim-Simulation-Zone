@@ -820,7 +820,7 @@ def main():
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
     parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='latest', help='Choose the checkpoint to resume from')
     parser.add_argument('--storage_path', type=str, default="/data/SocNav_Logs", help='Choose the path to store teh logs and ckpts')
-    parser.add_argument('-g','--gpu', nargs=+, type=int, help='Specofy the [Active Gpu/Model Gpu, Physics GPU]', required=True)
+    parser.add_argument('-g','--gpu', nargs='+', type=int, help='Specofy the [Active Gpu/Model Gpu, Physics GPU]', required=True)
     parser.add_argument('--ckpt_path', type=str, default=None, help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=32, help='Length of the MLP context')
     parser.add_argument('--img_context', type=int, default=16, help='Length of the image Context')
@@ -837,7 +837,7 @@ def main():
             tensor_log_dir = os.path.join(log_dir, "Tensorboard")
             os.makedirs(ckpt_log_dir, exist_ok=True)
 
-            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, gpus=gpus mlp_context=args.mlp_context, img_context=args.img_context, logdir=log_dir)
+            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, gpus=gpus, mlp_context=args.mlp_context, img_context=args.img_context, logdir=log_dir)
 
             best_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=True)
             latest_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=False)
@@ -931,7 +931,6 @@ if __name__ == '__main__':
 #             use_sde=False,
 #             log_std_init=-3,
 #         )
-
 #     total_timesteps = 50000000
 
 #     with wandb.init(project="social_navigation", name=f"{args.algo.upper()}_training") as run:
