@@ -33,6 +33,7 @@ class SocEnv(gym.Env):
         algo,
         botname,
         state_normalize,
+        gpus,
         logdir,
         mlp_context,
         img_context,
@@ -46,7 +47,7 @@ class SocEnv(gym.Env):
         
         from isaacsim import SimulationApp
 
-        CONFIG = {"width": 1280, "height": 720, "sync_loads": True, "headless": headless, "renderer": "RayTracedLighting"}
+        CONFIG = {"width": 1280, "height": 720, "sync_loads": True, "headless": headless, "active_gpu": gpus[0], "physics_gpu": gpus[1], "multi_gpu": True, "renderer": "RayTracedLighting"}
 
         # parser = argparse.ArgumentParser("Usd Load sample")
         # parser.add_argument(
@@ -766,7 +767,7 @@ def load_model_and_replay_buffer(algo, model, my_env, ckpt_path, replay_buffer_p
 
     return model
 
-def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
+def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: str):
     if algo.lower() == 'ppo':
         return PPO(
                 PPOMultiPolicy,
@@ -780,7 +781,7 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 ent_coef=0.1,
                 clip_range=0.3,
                 n_epochs=20,
-                device="cuda",
+                device=f"cuda:{gpus[0]}",
                 gae_lambda=1.0,
                 max_grad_norm=0.9,
                 vf_coef=0.95,
@@ -807,7 +808,7 @@ def create_model(algo: str, my_env, policy_kwargs: dict, tensor_log_dir: str):
                 sde_sample_freq=-1,
                 use_sde_at_warmup=False,
                 optimize_memory_usage=False,
-                device="cuda",
+                device=f"cuda:{gpus[0]}",
                 tensorboard_log=tensor_log_dir,
             )
     else:
@@ -819,6 +820,7 @@ def main():
     parser.add_argument('--botname', type=str, choices=['jackal', 'carter', 'nova_carter'], default='jackal', help='Choose the bot to train')
     parser.add_argument('--ckpt', type=str, choices=['latest', 'best'], default='latest', help='Choose the checkpoint to resume from')
     parser.add_argument('--storage_path', type=str, default="/data/SocNav_Logs", help='Choose the path to store teh logs and ckpts')
+    parser.add_argument('-g','--gpu', nargs=+, type=int, help='Specofy the [Active Gpu/Model Gpu, Physics GPU]', required=True)
     parser.add_argument('--ckpt_path', type=str, default=None, help='Choose the checkpoint to resume from')
     parser.add_argument('--mlp_context', type=int, default=32, help='Length of the MLP context')
     parser.add_argument('--img_context', type=int, default=16, help='Length of the image Context')
@@ -829,12 +831,13 @@ def main():
 
     try:
         with wandb.init(project="Mod_Isaac_Soc_Nav", name=f"{args.algo.upper()}_training") as run:
+            gpus = args.gpu
             log_dir = args.storage_path
             ckpt_log_dir = os.path.join(log_dir, "Checkpoints")
             tensor_log_dir = os.path.join(log_dir, "Tensorboard")
             os.makedirs(ckpt_log_dir, exist_ok=True)
 
-            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, mlp_context=args.mlp_context, img_context=args.img_context, logdir=log_dir)
+            my_env = SocEnv(algo=args.algo, botname=args.botname, headless=args.headless, state_normalize=args.state_normalize, gpus=gpus mlp_context=args.mlp_context, img_context=args.img_context, logdir=log_dir)
 
             best_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=True)
             latest_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=False)
@@ -848,12 +851,12 @@ def main():
             policy_kwargs = {
                 'ppo' : dict(net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])], activation_fn=th.nn.Tanh,
                              features_extractor_class=CustomCombinedExtractor,
-                            features_extractor_kwargs=dict(cnn_output_dim=256, algo="ppo", device="cuda", mlp_context=args.mlp_context, img_context=args.img_context)),
+                            features_extractor_kwargs=dict(cnn_output_dim=256, algo="ppo", device=f"cuda:{gpus[0]}", mlp_context=args.mlp_context, img_context=args.img_context)),
                 'sac' : dict(net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]), activation_fn=th.nn.ReLU, use_sde=False, log_std_init=-3,
                              features_extractor_class=CustomCombinedExtractor,
-                             features_extractor_kwargs=dict(cnn_output_dim=256, algo="sac", device='cuda', mlp_context=args.mlp_context, img_context=args.img_context))}[args.algo.lower()]
+                             features_extractor_kwargs=dict(cnn_output_dim=256, algo="sac", device=f'cuda:{gpus[0]}', mlp_context=args.mlp_context, img_context=args.img_context))}[args.algo.lower()]
 
-            model = create_model(args.algo, my_env, policy_kwargs, tensor_log_dir)
+            model = create_model(args.algo, my_env, gpus, policy_kwargs, tensor_log_dir)
 
             if args.resume_checkpoint:
                 print(f"Checkpoint to load: {checkpoint_to_load}")
@@ -870,7 +873,7 @@ def main():
             eval_callback = EvalCallback(my_env, best_model_save_path=os.path.join(ckpt_log_dir,"Eval_Best_Model"),
                              log_path=os.path.join(ckpt_log_dir, "Eval_Logs"), eval_freq=5000, n_eval_episodes=5,
                              deterministic=True, render=False)
-            # mixed_precision_callback = MixedPrecisionCallback()
+
             model.learn(total_timesteps=500000000, progress_bar=True, callback=[checkpoint_callback, best_model_callback, eval_callback, wandb_callback, gradient_accumulation_callback])
 
             final_model_path = os.path.join(ckpt_log_dir, f"{args.algo.upper()}_{checkpoint_callback.run_number}_final", f"Soc_Nav_{args.algo.upper()}_Policy")

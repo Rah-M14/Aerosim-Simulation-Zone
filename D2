@@ -19,6 +19,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 
+WORKDIR /isaac-sim
+
+RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
+    ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn shapely
+   
 WORKDIR /isaac-sim/standalone_examples/api/omni.isaac.kit/
 
 RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git && \
@@ -28,15 +33,11 @@ RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git && \
 
 WORKDIR /isaac-sim
 
-RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
-    ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn shapely
-
-RUN ./python.sh -m wandb login $WANDB_API_KEY
-
-RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
+RUN ./python.sh -m wandb login $WANDB_API_KEY && \
+    mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
     mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
     mv /isaac-sim/Final_WR_World /isaac-sim/standalone_examples/api/omni.isaac.kit 
 
-CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/Docker_Trainer.py", "--algo", "ppo", "--botname", "jackal", "--headless", "--state_normalize" ]
+CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/Docker_Trainer.py", "--algo", "sac", "--botname", "jackal", "--headless", "--state_normalize" ]
 
 # sudo docker build --build-arg WAPI_KEY=$WANDB_API -t isaac_build .
