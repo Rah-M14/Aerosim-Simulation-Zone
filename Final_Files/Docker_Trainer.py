@@ -914,36 +914,36 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
     def forward(self, observations) -> th.Tensor:
         encoded_tensor_list = []
 
-        print(
-            f"model devices {self.get_device(self.vec_lstm)}, {self.get_device(self.img_lstm)}, {self.get_device(self.img_cnn)}"
-        )
+        # print(
+        #     f"model devices {self.get_device(self.vec_lstm)}, {self.get_device(self.img_lstm)}, {self.get_device(self.img_cnn)}"
+        # )
         model_device = self.get_device(self.img_lstm)
 
         for key, subspace in self._observation_space.spaces.items():
             if key == "vector":
                 if observations[key].shape[0] == 1:
                     core_in = observations[key].squeeze(0)
-                    print("vec device nb", core_in.device)
+                    # print("vec device nb", core_in.device)
                     lstm_out = self.vec_lstm(core_in)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
                 else:
                     core_in = (
                         observations[key].view(self.mlp_context, -1, 9).to(model_device)
                     )
-                    print("vec device batch", core_in.device)
+                    # print("vec device batch", core_in.device)
                     lstm_out = self.vec_lstm(core_in)[1][0]
                     encoded_tensor_list.append(lstm_out[-1])
 
             else:
                 if observations[key].shape[0] == 1:
                     core_in = observations[key].squeeze(0)
-                    print("img device nb", core_in.device)
+                    # print("img device nb", core_in.device)
                     core_out = self.img_cnn(core_in)
                     lstm_out = self.img_lstm(core_out)[-1][0]
                     encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
                 else:
                     core_in = observations[key].to(model_device)
-                    print("img device batch", core_in.device)
+                    # print("img device batch", core_in.device)
                     batch_size = core_in.shape[0]
                     mini_batch_size = 32
                     num_mini_batches = batch_size // mini_batch_size
@@ -1058,7 +1058,7 @@ def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: s
 
 
 def main():
-    print("im new")
+    # print("im new")
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument(
         "--algo",
