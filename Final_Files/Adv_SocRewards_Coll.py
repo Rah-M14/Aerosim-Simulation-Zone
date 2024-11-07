@@ -127,7 +127,6 @@ class SocialReward:
             avg_rewards = {f"avg_{k}": v / self.episode_length for k, v in self.ep_reward_dict.items()}
             avg_rewards['episode_length'] = self.episode_length
             wandb.log(avg_rewards)
-            wandb.define_metric("Learning_Curve", step_metric="ep_count")
             wandb.log({"Learning_Curve": self.ep_reward_dict['ep_current_rew'], "ep_count": ep_count})
             self.logger.info(f"Average episode rewards: {avg_rewards}")
         else:

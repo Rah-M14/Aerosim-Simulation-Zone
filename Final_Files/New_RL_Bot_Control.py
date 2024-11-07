@@ -76,10 +76,10 @@ class RLBotAct():
         self.bot.apply_action(self.controller.forward(start_position=start_pos,
                                                         start_orientation=start_ori,
                                                         goal_position=goal_pos,
-                                                        lateral_velocity=0.2,
-                                                        yaw_velocity=2.5,
-                                                        heading_tol=5,
-                                                        position_tol=0.1))
+                                                        lateral_velocity=0.8,
+                                                        yaw_velocity=np.pi/2,
+                                                        heading_tol=10,
+                                                        position_tol=0.5))
         return None
 
 import math
@@ -121,7 +121,7 @@ class CustomWheelBasePoseController(BaseController):
         desired_heading = np.rad2deg(np.arctan2(delta_y, delta_x))
 
         # Calculate angle error (degrees)
-        angle_error = (desired_heading - current_yaw + 180) % 360 - 180
+        angle_error = ((desired_heading) - current_yaw + 180) % 360 - 180
 
         # Calculate distance to goal
         dist_to_goal = np.linalg.norm(start_position[:2] - goal_position[:2])
@@ -130,13 +130,19 @@ class CustomWheelBasePoseController(BaseController):
         if dist_to_goal < position_tol:
             command = [0.0, 0.0]  # Stop if within position tolerance
             self.goal_reached = True
-        elif dist_to_goal < position_tol*5:
-            command = [lateral_velocity/2, 0]
         elif np.abs(angle_error) > heading_tol:
             command = [0.0, yaw_velocity if angle_error > 0 else -yaw_velocity]
+        # elif np.abs(angle_error) > heading_tol + 1 and np.abs(angle_error) < heading_tol*2:
+        #     command = [0.2, yaw_velocity*0.5 if angle_error > 0 else -yaw_velocity*0.5]
+        # elif np.abs(angle_error) > heading_tol + 1:
+        #     command = [0.0, yaw_velocity/4 if angle_error > 0 else -yaw_velocity/4]
+        elif dist_to_goal < position_tol*4:
+            command = [lateral_velocity/6, 0]
+        elif dist_to_goal < position_tol + 0.05 and dist_to_goal < position_tol*4:
+            command = [lateral_velocity/10, 0]
         else:
             command = [lateral_velocity, 0.0]
-
+        # print(f"command {command}, distance to goal : {dist_to_goal}, angle error {angle_error}")
         return self._open_loop_wheel_controller.forward(command)
     
     def reset(self) -> None:

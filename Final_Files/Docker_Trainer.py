@@ -45,8 +45,8 @@ class SocEnv(gym.Env):
         img_context,
         headless,
         skip_frame=1,
-        physics_dt=1 / 4,
-        rendering_dt=1 / 4,
+        physics_dt=1/15,
+        rendering_dt=1/15,
         max_episode_length=200,
         seed=0,
     ) -> None:
@@ -54,8 +54,8 @@ class SocEnv(gym.Env):
         from isaacsim import SimulationApp
 
         CONFIG = {
-            "width": 720,
-            "height": 576,
+            "width": 1280,
+            "height": 720,
             "sync_loads": True,
             "headless": headless,
             "active_gpu": gpus[0],
@@ -158,7 +158,7 @@ class SocEnv(gym.Env):
         # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         # usd_path = self.assets_root_path + current_world_usd
 
-        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -190,6 +190,10 @@ class SocEnv(gym.Env):
         )
         self.timeline = omni.timeline.get_timeline_interface()
         self.world.initialize_physics()
+        print(f"the current physics dt is : {self.world.get_physics_dt()}")
+        print(f"the current rendering dt is : {self.world.get_rendering_dt()}")
+        # self.world.set_physics_step_size(step_size=self._dt * 60) 
+        # self.world.set_gpu_dynamics_enabled(enabled=True)
         # print("Waiting Room with Physics initialization in the World!")
 
         enable_extension("omni.isaac.debug_draw")
@@ -462,16 +466,25 @@ class SocEnv(gym.Env):
             observation[3] * self.max_episode_length,
         ]
 
-    def next_coords(self, actions, position):
+    def next_coords(self, actions, position, orientation):
+        from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
         l, theta = actions
-        return np.array(
-            [(position[0] + np.sin(theta) * l), (position[1] + np.cos(theta) * l), 0.0]
-        )
+        _, _, current_yaw = quat_to_euler_angles(orientation)
+        world_theta = current_yaw + theta
+        
+        x1, y1 = l*np.cos(world_theta), l*np.sin(world_theta)
+        next_pos = np.array([x1, y1, 0.0])
+        
+        # print(f"Got a new position : {position + next_pos}")
+        return position + next_pos
 
     def send_robot_actions(self, step_size):
+        # from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
         if self.next_pos is not None:
             try:
                 position, orientation = self.bot.rl_bot.get_world_pose()
+                # cur_roll, cur_pitch, cur_yaw = quat_to_euler_angles(orientation)
+                # print(f"Roll : {cur_roll}, pitch : {cur_pitch}, yaw : {cur_yaw}")
                 self.act.send_actions(
                     start_pos=position, start_ori=orientation, goal_pos=self.next_pos
                 )
@@ -497,35 +510,37 @@ class SocEnv(gym.Env):
                 True,
                 {},
             )
+        
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         self.timestep += 1.0
         self.total_timesteps += 1
 
-        self.next_pos = self.next_coords(action, prev_bot_pos)
+        self.next_pos = self.next_coords(action, prev_bot_pos, prev_bot_ori)
         self.world.step()
 
         tmp_t = 0
-        max_t = 200
-        # print("about to enter the while loop")
+        max_t = 1000
         # start_t = time.time()
         while True:
             tmp_t += 1
             self.world.step()
+            # print(f"L2 Dist from int goal at {tmp_t} :  {np.linalg.norm(self.next_pos - self.bot.rl_bot.get_world_pose()[0])}")
             if self.controller.goal_reached:
+                # print(f"Interim Goal Reached at {tmp_t} : {self.controller.goal_reached}")
                 break
             elif tmp_t == max_t:
-                wandb.log({"while timeout": self.reward_manager.timeout_penalty})
+                wandb.log({"while timeout": 1})
                 # end_t = time.time()
                 # diff_t = end_t-start_t
                 # print(f"Locked out of heaven! Spent a time of {diff_t} seconds")
-
                 return (
                     self.get_observations()[0],
-                    self.reward_manager.timeout_penalty,
+                    0,
                     True,
                     {},
                 )
-        # cur_pos, _ = self.bot.rl_bot.get_world_pose()
+        # print(f"Out of while loop with Goal Reached : {self.controller.goal_reached}")
+        # # cur_pos, _ = self.bot.rl_bot.get_world_pose()
         # print(f"the distance moved now is : {np.linalg.norm(cur_pos-prev_bot_pos)}")
 
         # end_t = time.time()
@@ -1058,7 +1073,6 @@ def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: s
 
 
 def main():
-    # print("im new")
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument(
         "--algo",
@@ -1131,6 +1145,7 @@ def main():
             device = f"cuda:{gpus[0]}"
             th.device(device)
 
+
             # os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpus[0]}"
             # th.cuda.set_device(gpus[0])
 
@@ -1144,6 +1159,8 @@ def main():
                 img_context=args.img_context,
                 logdir=log_dir,
             )
+
+            print(f"Checkpoint Given to be Loaded : {args.ckpt_path}")
 
             best_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=True)
             latest_checkpoint = get_checkpoint(args.algo, ckpt_log_dir, best=False)
