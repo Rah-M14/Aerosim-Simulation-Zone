@@ -47,7 +47,7 @@ class SocEnv(gym.Env):
         skip_frame=1,
         physics_dt=1/15,
         rendering_dt=1/15,
-        max_episode_length=200,
+        max_episode_length=1000,
         seed=0,
     ) -> None:
 
@@ -158,7 +158,7 @@ class SocEnv(gym.Env):
         # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         # usd_path = self.assets_root_path + current_world_usd
 
-        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -206,17 +206,17 @@ class SocEnv(gym.Env):
             assets_root_path=self.assets_root_path,
             botname=self.botname,
         )
-        self.core_controller = RLBotController(botname=self.botname)
-        self.controller = CustomWheelBasePoseController(
-            name="cool_controller",
-            open_loop_wheel_controller=self.core_controller,
-            is_holonomic=False,
-        )
+        # self.core_controller = RLBotController(botname=self.botname)
+        # self.controller = CustomWheelBasePoseController(
+        #     name="cool_controller",
+        #     open_loop_wheel_controller=self.core_controller,
+        #     is_holonomic=False,
+        # )
 
-        self.act = RLBotAct(self.kit, self.bot.rl_bot, self.controller)
-        self.world.add_physics_callback(
-            "sending_actions", callback_fn=self.send_robot_actions
-        )
+        # self.act = RLBotAct(self.kit, self.bot.rl_bot, self.controller)
+        # self.world.add_physics_callback(
+        #     "sending_actions", callback_fn=self.send_robot_actions
+        # )
         print("Bot Initialised!")
         inav = omni.anim.navigation.core.acquire_interface()
         print("Navmesh Created!")
@@ -226,7 +226,7 @@ class SocEnv(gym.Env):
 
         # WORLD PARAMETERS
 
-        self.next_pos = None
+        self.next_pos ,self.next_ori = None, None
 
         self.world_limits = np.array([20.0, 14.0])
         self.world_min_max = np.array([-10, -7, 10, 7])  # (min_x, min_y, max_x, max_y)
@@ -240,6 +240,10 @@ class SocEnv(gym.Env):
         self.frame_num = 0
 
         # BOT PARAMETERS
+        self.bot_length = 0.508 #Length in metres
+        self.bot_l = self.bot_length/10
+        self.bot_theta = np.pi/18
+
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
         self.max_velocity = 1.0
@@ -266,12 +270,14 @@ class SocEnv(gym.Env):
 
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
+        
         self.action_space = spaces.Box(
-            low=np.array([-0.1, -(np.pi / 4)]),
-            high=np.array([1.5, (np.pi / 4)]),
+            low=np.array([-1, -1]),
+            high=np.array([1, 1]),
             shape=(2,),
             dtype=np.float32,
         )  # (l, theta)
+
         self.observation_space = spaces.Dict(
             {
                 "vector": spaces.Box(
@@ -467,16 +473,20 @@ class SocEnv(gym.Env):
         ]
 
     def next_coords(self, actions, position, orientation):
-        from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
-        l, theta = actions
+        from omni.isaac.core.utils.rotations import quat_to_euler_angles, euler_angles_to_quat
+        
+        l, theta = actions[0]*self.bot_l, actions[1]*self.bot_theta
+
         _, _, current_yaw = quat_to_euler_angles(orientation)
         world_theta = current_yaw + theta
         
         x1, y1 = l*np.cos(world_theta), l*np.sin(world_theta)
         next_pos = np.array([x1, y1, 0.0])
+
+        orien = euler_angles_to_quat(np.array([0.0, 0.0, world_theta]))
         
         # print(f"Got a new position : {position + next_pos}")
-        return position + next_pos
+        return (position + next_pos, orien)
 
     def send_robot_actions(self, step_size):
         # from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
@@ -515,30 +525,34 @@ class SocEnv(gym.Env):
         self.timestep += 1.0
         self.total_timesteps += 1
 
-        self.next_pos = self.next_coords(action, prev_bot_pos, prev_bot_ori)
+        self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
+        self.world.step()
         self.world.step()
 
-        tmp_t = 0
-        max_t = 1000
-        # start_t = time.time()
-        while True:
-            tmp_t += 1
-            self.world.step()
-            # print(f"L2 Dist from int goal at {tmp_t} :  {np.linalg.norm(self.next_pos - self.bot.rl_bot.get_world_pose()[0])}")
-            if self.controller.goal_reached:
-                # print(f"Interim Goal Reached at {tmp_t} : {self.controller.goal_reached}")
-                break
-            elif tmp_t == max_t:
-                wandb.log({"while timeout": 1})
-                # end_t = time.time()
-                # diff_t = end_t-start_t
-                # print(f"Locked out of heaven! Spent a time of {diff_t} seconds")
-                return (
-                    self.get_observations()[0],
-                    0,
-                    True,
-                    {},
-                )
+        self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
+        self.kit.update()
+
+        # tmp_t = 0
+        # max_t = 1000
+        # # start_t = time.time()
+        # while True:
+        #     tmp_t += 1
+        #     self.world.step()
+        #     # print(f"L2 Dist from int goal at {tmp_t} :  {np.linalg.norm(self.next_pos - self.bot.rl_bot.get_world_pose()[0])}")
+        #     if self.controller.goal_reached:
+        #         # print(f"Interim Goal Reached at {tmp_t} : {self.controller.goal_reached}")
+        #         break
+        #     elif tmp_t == max_t:
+        #         wandb.log({"while timeout": 1})
+        #         # end_t = time.time()
+        #         # diff_t = end_t-start_t
+        #         # print(f"Locked out of heaven! Spent a time of {diff_t} seconds")
+        #         return (
+        #             self.get_observations()[0],
+        #             0,
+        #             True,
+        #             {},
+        #         )
         # print(f"Out of while loop with Goal Reached : {self.controller.goal_reached}")
         # # cur_pos, _ = self.bot.rl_bot.get_world_pose()
         # print(f"the distance moved now is : {np.linalg.norm(cur_pos-prev_bot_pos)}")
