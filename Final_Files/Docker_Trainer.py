@@ -158,7 +158,8 @@ class SocEnv(gym.Env):
         # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         # usd_path = self.assets_root_path + current_world_usd
 
-        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/final_wr_world/new_core"
 
         try:
             result = is_file(usd_path)
@@ -311,7 +312,6 @@ class SocEnv(gym.Env):
         self.env_log_dir = os.path.join(self.logdir, "Env_Logs")
         self.logger = self.setup_logging()
         print(f"Logger initialized: {self.logger}")
-        # print(f"Logger handlers: {self.logger.handlers}")
         self.logger.info("This is a test log message from __init__")
 
         # REWARD PARAMETERS
@@ -327,40 +327,32 @@ class SocEnv(gym.Env):
         self.episodes_per_level = 100
         self.reward_manager.update_curriculum_level(self.curriculum_level)
 
-        # wandb.init(project="SocNav_Omni", name="environment_logging")
-
     def setup_logging(self):
         try:
             os.makedirs(self.env_log_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_file = os.path.join(self.env_log_dir, f"social_env_{timestamp}.log")
 
-            # Check if we can write to the file
             with open(log_file, "w") as f:
                 f.write("Initializing log file\n")
 
-            # Create a logger
             logger = logging.getLogger(__name__)
             logger.setLevel(logging.INFO)
 
-            # Create file handler which logs even debug messages
             fh = logging.FileHandler(log_file)
             fh.setLevel(logging.INFO)
 
-            # Create formatter and add it to the handlers
             formatter = logging.Formatter(
                 "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
             )
             fh.setFormatter(formatter)
 
-            # Add the handlers to the logger
             logger.addHandler(fh)
 
             logger.info("Logging initialized successfully")
             return logger
         except Exception as e:
             print(f"Error setting up logging: {e}")
-            # Fallback to console logging if file logging fails
             logger = logging.getLogger(__name__)
             logger.setLevel(logging.INFO)
             ch = logging.StreamHandler()
@@ -374,7 +366,6 @@ class SocEnv(gym.Env):
             return logger
 
     def reset(self):
-        # print("For some reason reset is being called")
         self.episode_count += 1
         self.reward_manager.end_episode(self.episode_count)
         self.kit.update()
@@ -388,8 +379,6 @@ class SocEnv(gym.Env):
         self.bot.rl_bot.goal_pose = self._gen_goal_pose()
         if not self.headless:
             print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
-
-        # state_goal_dist = np.linalg.norm(self.bot.rl_bot.goal_pose[:2] - self.bot.rl_bot.start_pose[0][:2])
 
         observations, _, _, _ = self.get_observations()
         self.ep_steps = 0
@@ -492,33 +481,14 @@ class SocEnv(gym.Env):
         
         return (position + next_pos, orien)
 
-    # def send_robot_actions(self, step_size):
-    #     # from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
-    #     if self.next_pos is not None:
-    #         try:
-    #             position, orientation = self.bot.rl_bot.get_world_pose()
-    #             # cur_roll, cur_pitch, cur_yaw = quat_to_euler_angles(orientation)
-    #             # print(f"Roll : {cur_roll}, pitch : {cur_pitch}, yaw : {cur_yaw}")
-    #             self.act.send_actions(
-    #                 start_pos=position, start_ori=orientation, goal_pos=self.next_pos
-    #             )
-    #         except Exception as e:
-    #             print(f"Warning in send bot actions: Failed to get robot pose: {e}")
-    #             # Reset simulation if needed
-    #             self.world.reset()
-    #             self.kit.update()
-    #             return
-
     def step(
         self, action
-    ):  # action = [l, theta], l in [-0.1, 1.5] and theta in [-pi/4, pi/4]
-        # self.sim_context.play()
+    ):  # action = [l, theta], l in [-0.5, 1] and theta in [-1, 1]
         wandb.log({"Simulation_timesteps" : self.sim_context.current_time})
         try:
             prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         except Exception as e:
             print(f"Warning in step: Failed to get initial robot pose: {e}")
-            # Return a failed state
             return (
                 self.get_observations()[0],
                 self.reward_manager.timeout_penalty,
@@ -533,48 +503,6 @@ class SocEnv(gym.Env):
 
         self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
         self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
-
-        # cur_pos = self.people.person_list[0]._state.position
-        # dist = np.linalg.norm(cur_pos - self.prev_pos)
-        # self.human_motion += dist
-        # avg_human_dist = self.human_motion/self.sim_context.current_time
-        # print(f"Average human speed : {avg_human_dist} m/s")
-
-        # new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
-        # dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
-        # self.bot_vel += dist_bot
-        # avg_bot_vel = self.bot_vel/self.sim_context.current_time
-        # print(f"Average Bot speed : {avg_bot_vel} m/s")
-
-
-        # tmp_t = 0
-        # max_t = 1000
-        # # start_t = time.time()
-        # while True:
-        #     tmp_t += 1
-        #     self.world.step()
-        #     # print(f"L2 Dist from int goal at {tmp_t} :  {np.linalg.norm(self.next_pos - self.bot.rl_bot.get_world_pose()[0])}")
-        #     if self.controller.goal_reached:
-        #         # print(f"Interim Goal Reached at {tmp_t} : {self.controller.goal_reached}")
-        #         break
-        #     elif tmp_t == max_t:
-        #         wandb.log({"while timeout": 1})
-        #         # end_t = time.time()
-        #         # diff_t = end_t-start_t
-        #         # print(f"Locked out of heaven! Spent a time of {diff_t} seconds")
-        #         return (
-        #             self.get_observations()[0],
-        #             0,
-        #             True,
-        #             {},
-        #         )
-        # print(f"Out of while loop with Goal Reached : {self.controller.goal_reached}")
-        # # cur_pos, _ = self.bot.rl_bot.get_world_pose()
-        # print(f"the distance moved now is : {np.linalg.norm(cur_pos-prev_bot_pos)}")
-
-        # end_t = time.time()
-        # diff_t = end_t-start_t
-        # print(f"Out of the while loop, spent a time of {diff_t} seconds")
 
         self.ep_steps += 1
 
@@ -618,10 +546,6 @@ class SocEnv(gym.Env):
             }
         )
         wandb.log(self.reward_manager.ep_reward_dict)
-
-        # self.prev_pos = cur_pos
-        # self.prev_bots_pos = new_bot_pos
-        # print(f"person previous pos : {self.prev_pos}")
 
         return observations, reward, done, self.info
 
@@ -962,9 +886,6 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
     def forward(self, observations) -> th.Tensor:
         encoded_tensor_list = []
 
-        # print(
-        #     f"model devices {self.get_device(self.vec_lstm)}, {self.get_device(self.img_lstm)}, {self.get_device(self.img_cnn)}"
-        # )
         model_device = self.get_device(self.img_lstm)
 
         for key, subspace in self._observation_space.spaces.items():
@@ -1178,10 +1099,6 @@ def main():
             device = f"cuda:{gpus[0]}"
             th.device(device)
 
-
-            # os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpus[0]}"
-            # th.cuda.set_device(gpus[0])
-
             my_env = SocEnv(
                 algo=args.algo,
                 botname=args.botname,
@@ -1301,7 +1218,5 @@ def main():
         wandb.finish()
         my_env.close()
 
-
-# if __name__ == '__main__':
 if __name__ == "__main__":
     main()
