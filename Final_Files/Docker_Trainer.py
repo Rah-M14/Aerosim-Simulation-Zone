@@ -45,9 +45,9 @@ class SocEnv(gym.Env):
         img_context,
         headless,
         skip_frame=1,
-        physics_dt=1/15,
-        rendering_dt=1/15,
-        max_episode_length=1000,
+        physics_dt=1/1,
+        rendering_dt=1/1,
+        max_episode_length=200,
         seed=0,
     ) -> None:
 
@@ -59,8 +59,8 @@ class SocEnv(gym.Env):
             "sync_loads": True,
             "headless": headless,
             "active_gpu": gpus[0],
-            "physics_gpu": gpus[1],
-            "multi_gpu": True,
+            "physics_gpu": gpus[0],
+            "multi_gpu": False,
             "renderer": "RayTracedLighting",
         }
 
@@ -158,7 +158,7 @@ class SocEnv(gym.Env):
         # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         # usd_path = self.assets_root_path + current_world_usd
 
-        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -188,6 +188,7 @@ class SocEnv(gym.Env):
         self.world = World(
             physics_dt=physics_dt, rendering_dt=rendering_dt, stage_units_in_meters=1.0
         )
+        self.sim_context = SimulationContext()
         self.timeline = omni.timeline.get_timeline_interface()
         self.world.initialize_physics()
         print(f"the current physics dt is : {self.world.get_physics_dt()}")
@@ -226,30 +227,37 @@ class SocEnv(gym.Env):
 
         # WORLD PARAMETERS
 
-        self.next_pos ,self.next_ori = None, None
+        # self.next_pos ,self.next_ori = None, None
+        # self.human_motion = 0
 
         self.world_limits = np.array([20.0, 14.0])
         self.world_min_max = np.array([-10, -7, 10, 7])  # (min_x, min_y, max_x, max_y)
 
-        self.carter_vel_limits = np.array([7.0, 7.0])
-        self.carter_ang_vel_limits = np.array([np.pi, np.pi])
+        # self.carter_vel_limits = np.array([7.0, 7.0])
+        # self.carter_ang_vel_limits = np.array([np.pi, np.pi])
         self.state_normalize = state_normalize
+        
         self.timestep = 0
         self.total_timesteps = 0
-
         self.frame_num = 0
 
         # BOT PARAMETERS
-        self.bot_length = 0.508 #Length in metres
-        self.bot_l = self.bot_length/10
-        self.bot_theta = np.pi/18
+        # self.prev_pos = self.people.person_list[0]._state.position
+        # self.cur_pos = self.people.person_list[0]._state.position
+        # self.bot_vel = 0
+        # self.prev_bots_pos, _ = self.bot.rl_bot.get_world_pose()
 
+        self.bot_length = 0.508 #Length in metres
+        self.bot_l = self.bot_length*2
+        self.bot_theta = np.pi/9
+        
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
-        self.max_velocity = 1.0
-        self.max_angular_velocity = np.pi * 4
-        self.act_steps = 5
-        self.pos_tol = 0.05  # Thiss tolerance should be greater than the position_tol in the controller
+        
+        # self.max_velocity = 1.0
+        # self.max_angular_velocity = np.pi * 4
+        # self.act_steps = 5
+        # self.pos_tol = 0.05  # Thiss tolerance should be greater than the position_tol in the controller
 
         self.yolo_model = YOLO("yolo11n.pt")
 
@@ -270,14 +278,12 @@ class SocEnv(gym.Env):
 
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
-        
         self.action_space = spaces.Box(
-            low=np.array([-1, -1]),
+            low=np.array([-0.5, -1]),
             high=np.array([1, 1]),
             shape=(2,),
             dtype=np.float32,
         )  # (l, theta)
-
         self.observation_space = spaces.Dict(
             {
                 "vector": spaces.Box(
@@ -393,7 +399,6 @@ class SocEnv(gym.Env):
         return observations
 
     def get_observations(self):
-        self.world.render()
         bot_world_pos, bot_world_ori = self.bot.rl_bot.get_world_pose()
         goal_world_pos = self.bot.rl_bot.goal_pose
         timestep = self.timestep
@@ -474,7 +479,7 @@ class SocEnv(gym.Env):
 
     def next_coords(self, actions, position, orientation):
         from omni.isaac.core.utils.rotations import quat_to_euler_angles, euler_angles_to_quat
-        
+
         l, theta = actions[0]*self.bot_l, actions[1]*self.bot_theta
 
         _, _, current_yaw = quat_to_euler_angles(orientation)
@@ -485,30 +490,30 @@ class SocEnv(gym.Env):
 
         orien = euler_angles_to_quat(np.array([0.0, 0.0, world_theta]))
         
-        # print(f"Got a new position : {position + next_pos}")
         return (position + next_pos, orien)
 
-    def send_robot_actions(self, step_size):
-        # from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
-        if self.next_pos is not None:
-            try:
-                position, orientation = self.bot.rl_bot.get_world_pose()
-                # cur_roll, cur_pitch, cur_yaw = quat_to_euler_angles(orientation)
-                # print(f"Roll : {cur_roll}, pitch : {cur_pitch}, yaw : {cur_yaw}")
-                self.act.send_actions(
-                    start_pos=position, start_ori=orientation, goal_pos=self.next_pos
-                )
-            except Exception as e:
-                print(f"Warning in send bot actions: Failed to get robot pose: {e}")
-                # Reset simulation if needed
-                self.world.reset()
-                self.kit.update()
-                return
+    # def send_robot_actions(self, step_size):
+    #     # from omni.isaac.core.utils.rotations import quat_to_euler_angles, quat_to_rot_matrix
+    #     if self.next_pos is not None:
+    #         try:
+    #             position, orientation = self.bot.rl_bot.get_world_pose()
+    #             # cur_roll, cur_pitch, cur_yaw = quat_to_euler_angles(orientation)
+    #             # print(f"Roll : {cur_roll}, pitch : {cur_pitch}, yaw : {cur_yaw}")
+    #             self.act.send_actions(
+    #                 start_pos=position, start_ori=orientation, goal_pos=self.next_pos
+    #             )
+    #         except Exception as e:
+    #             print(f"Warning in send bot actions: Failed to get robot pose: {e}")
+    #             # Reset simulation if needed
+    #             self.world.reset()
+    #             self.kit.update()
+    #             return
 
     def step(
         self, action
     ):  # action = [l, theta], l in [-0.1, 1.5] and theta in [-pi/4, pi/4]
-        wandb.log({"while timeout": 0})
+        # self.sim_context.play()
+        wandb.log({"Simulation_timesteps" : self.sim_context.current_time})
         try:
             prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         except Exception as e:
@@ -522,15 +527,25 @@ class SocEnv(gym.Env):
             )
         
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
+
         self.timestep += 1.0
         self.total_timesteps += 1
 
         self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
-        self.world.step()
-        self.world.step()
-
         self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
-        self.kit.update()
+
+        # cur_pos = self.people.person_list[0]._state.position
+        # dist = np.linalg.norm(cur_pos - self.prev_pos)
+        # self.human_motion += dist
+        # avg_human_dist = self.human_motion/self.sim_context.current_time
+        # print(f"Average human speed : {avg_human_dist} m/s")
+
+        # new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
+        # dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
+        # self.bot_vel += dist_bot
+        # avg_bot_vel = self.bot_vel/self.sim_context.current_time
+        # print(f"Average Bot speed : {avg_bot_vel} m/s")
+
 
         # tmp_t = 0
         # max_t = 1000
@@ -603,6 +618,10 @@ class SocEnv(gym.Env):
             }
         )
         wandb.log(self.reward_manager.ep_reward_dict)
+
+        # self.prev_pos = cur_pos
+        # self.prev_bots_pos = new_bot_pos
+        # print(f"person previous pos : {self.prev_pos}")
 
         return observations, reward, done, self.info
 
@@ -836,22 +855,22 @@ class IncrementalCheckpointCallback(CheckpointCallback):
         return max(run_numbers) + 1
 
 
-class WandbCallback(BaseCallback):
-    def __init__(self, algo, verbose=0):
-        super(WandbCallback, self).__init__(verbose)
-        self.step_count = 0
-        self.algo = algo
+# class WandbCallback(BaseCallback):
+#     def __init__(self, algo, verbose=0):
+#         super(WandbCallback, self).__init__(verbose)
+#         self.step_count = 0
+#         self.algo = algo
 
-    def _on_step(self) -> bool:
-        self.step_count += 1
-        if self.step_count % 20 == 0:
-            log_data = {
-                "callback_total_timesteps": self.step_count,
-                "learning_rate": self.model.learning_rate,
-            }
-            wandb.log(log_data)
-            # animated_loading()
-        return True
+#     def _on_step(self) -> bool:
+#         self.step_count += 1
+#         if self.step_count % 20 == 0:
+#             # log_data = {
+#             #     "callback_total_timesteps": self.step_count,
+#             #     "learning_rate": self.model.learning_rate,
+#             # }
+#             # wandb.log(log_data)
+#             # animated_loading()
+#         return True
 
 
 class GradientAccumulationCallback(BaseCallback):
@@ -1236,7 +1255,7 @@ def main():
                 save_path=ckpt_log_dir,
                 name_prefix=f"SocNav_{args.algo.upper()}_ckpt",
             )
-            wandb_callback = WandbCallback(algo=args.algo)
+            # wandb_callback = WandbCallback(algo=args.algo)
             best_model_callback = BestModelCallback(
                 algo=args.algo,
                 save_path=os.path.join(
@@ -1264,7 +1283,7 @@ def main():
                     checkpoint_callback,
                     best_model_callback,
                     eval_callback,
-                    wandb_callback,
+                    # wandb_callback,
                     gradient_accumulation_callback,
                 ],
             )

@@ -59,12 +59,13 @@ class GoTo_Controller(PersonController):
     def __init__(self, movement_generator):
         super().__init__()
 
+        # self.person_pos = self._person._state.position
         self.next_position = None
-        self.speed = 1.0
+        self.speed = 0.7
 
         self.movement_generator = movement_generator
 
-    def update(self, dt=1/30):
+    def update(self, dt=1/1):
         """
         New additions to integrate with previous code.
         """
@@ -76,6 +77,10 @@ class GoTo_Controller(PersonController):
             distance_to_target_position = np.linalg.norm(
                 self.next_position - self._person._state.position
             )
+        
+        # if character_name == "P_1_G_1":
+        #     print("inside update")
+        #     print(f"person 1 g1 position : {self._person._state.position}")
 
         if distance_to_target_position > 0.2:
             pass
@@ -83,10 +88,10 @@ class GoTo_Controller(PersonController):
             if character_name == "P_1_G_1":
                 self.movement_generator.generate_step()
             self.next_position = self.movement_generator.character_positions[character_name] + (0,)
-            self._person.update_target_position(self.next_position, self.speed)
+            self._person.update_target_position(self.next_position, self.speed + np.random.uniform(low=-0.1, high=0.1, size=1)[0])
 
 class PegasusApp:
-    def __init__(self, world, stage, simulation_app, timeline, ):
+    def __init__(self, world, stage, simulation_app, timeline):
 
         args = CustomArguments()
         self.args = args
@@ -218,18 +223,19 @@ class PegasusApp:
 
         return hotspots_list, obstacle_list, prims_list
 
-    def run(self):
-        """
-        Method that implements the application main loop, where the physics steps are executed.
-        """
-        self.timeline.play()
+    # def run(self):
+    #     """
+    #     Method that implements the application main loop, where the physics steps are executed.
+    #     """
+    #     self.timeline.play()
 
-        i = 0
-        while self.simulation_app.is_running() and not self.stop_sim:
-            self.world.step(render=True)
-            i+=1
+    #     i = 0
+    #     while self.simulation_app.is_running() and not self.stop_sim:
+    #         self.world.step(render=True)
+    #         print("in pegasus run")
+    #         i+=1
 
-        # Cleanup and stop
-        carb.log_warn("PegasusApp Simulation App is closing.")
-        self.timeline.stop()
-        self.simulation_app.close()
+    #     # Cleanup and stop
+    #     carb.log_warn("PegasusApp Simulation App is closing.")
+    #     self.timeline.stop()
+    #     self.simulation_app.close()

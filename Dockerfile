@@ -13,7 +13,7 @@ WORKDIR /app
 
 # # Install Python 3.10 and set it as the default
 RUN apt-get update && \
-    apt-get install -y python3.10 python3.10-dev python3.10-distutils git && \
+    apt-get install -y python3.10 python3.10-dev python3.10-distutils git htop nvtop screen tmux && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
