@@ -714,6 +714,7 @@ class BestModelCallback(BaseCallback):
                         self.save_replay_buffer
                         and hasattr(self.model, "replay_buffer")
                         and self.model.replay_buffer is not None
+                        and self.algo != "SAC"
                     ):
                         replay_buffer_path = os.path.join(
                             self.save_path, f"best_SocNav_{self.algo}_Replay_Buffer.pkl"
