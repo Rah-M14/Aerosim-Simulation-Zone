@@ -61,11 +61,11 @@ class GoTo_Controller(PersonController):
 
         # self.person_pos = self._person._state.position
         self.next_position = None
-        self.speed = 0.7
+        self.speed = 0.3
 
         self.movement_generator = movement_generator
 
-    def update(self, dt=1/1):
+    def update(self, dt=1/2):
         """
         New additions to integrate with previous code.
         """

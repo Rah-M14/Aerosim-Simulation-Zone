@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: socnav-train
+  labels:
+    k8s-app: socnav-train
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: socnav-train
+  template:
+    metadata: 
+      labels:
+        k8s-app: socnav-train
+    spec:
+      imagePullSecrets:
+        - name: gitlab-registry-secret
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-GeForce-RTX-4090
+      tolerations:
+        - key: "msu-cache"
+          operator: "Exists"
+        - key: "nautilus.io/5g"
+          operator: "Exists"
+        - key: "nautilus.io/slow-network"
+          operator: "Exists"
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+        - key: "nautilus.io/csusb"
+          operator: "Exists"
+        - key: "nautilus.io/gitlab-issue"
+          operator: "Exists"
+        
+      containers:
+      - name: socnav-train
+        image: gitlab-registry.nrp-nautilus.io/tanjidt/socnav
+        command: ["sh", "-c", "apt update && sleep infinity"]
+        env:
+        - name: ACCEPT_EULA
+          value: "Y"
+        - name: PRIVACY_CONSENT
+          value: "Y"
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        resources:
+          limits:
+            memory: "80Gi"                 
+            cpu: "28"                      
+            ephemeral-storage: "96Gi"
+            nvidia.com/gpu: 1     
+          requests:
+            memory: "32Gi"                 
+            cpu: "24"                        
+            ephemeral-storage: "20Gi"
+            nvidia.com/gpu: 1         
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        - mountPath: /dev/shm
+          name: cache-volume
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: robonav-1
+        - emptyDir:
+            medium: Memory
+            sizeLimit: "8Gi"         # Reduced size limit for memory volume
+          name: cache-volume

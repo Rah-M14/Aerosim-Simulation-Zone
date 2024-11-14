@@ -45,8 +45,8 @@ class SocEnv(gym.Env):
         img_context,
         headless,
         skip_frame=1,
-        physics_dt=1/1,
-        rendering_dt=1/1,
+        physics_dt=1/2,
+        rendering_dt=1/2,
         max_episode_length=200,
         seed=0,
     ) -> None:
@@ -58,9 +58,9 @@ class SocEnv(gym.Env):
             "height": 720,
             "sync_loads": True,
             "headless": headless,
-            "active_gpu": gpus[0],
-            "physics_gpu": gpus[0],
-            "multi_gpu": False,
+            # "active_gpu": gpus[0],
+            # "physics_gpu": gpus[0],
+            "multi_gpu": True,
             "renderer": "RayTracedLighting",
         }
 
@@ -159,7 +159,7 @@ class SocEnv(gym.Env):
         # usd_path = self.assets_root_path + current_world_usd
 
         # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
-        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/final_wr_world/new_core"
+        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -228,8 +228,8 @@ class SocEnv(gym.Env):
 
         # WORLD PARAMETERS
 
-        # self.next_pos ,self.next_ori = None, None
-        # self.human_motion = 0
+        self.next_pos ,self.next_ori = None, None
+        self.human_motion = 0
 
         self.world_limits = np.array([20.0, 14.0])
         self.world_min_max = np.array([-10, -7, 10, 7])  # (min_x, min_y, max_x, max_y)
@@ -243,10 +243,10 @@ class SocEnv(gym.Env):
         self.frame_num = 0
 
         # BOT PARAMETERS
-        # self.prev_pos = self.people.person_list[0]._state.position
-        # self.cur_pos = self.people.person_list[0]._state.position
-        # self.bot_vel = 0
-        # self.prev_bots_pos, _ = self.bot.rl_bot.get_world_pose()
+        self.prev_pos = self.people.person_list[0]._state.position
+        self.cur_pos = self.people.person_list[0]._state.position
+        self.bot_vel = 0
+        self.prev_bots_pos, _ = self.bot.rl_bot.get_world_pose()
 
         self.bot_length = 0.508 #Length in metres
         self.bot_l = self.bot_length*2
@@ -399,6 +399,7 @@ class SocEnv(gym.Env):
                 goal_world_pos[:2] / self.world_limits,
                 timestep / self.max_episode_length,
             ]
+            # np.save(f"/home/rahm/TEST/MLP/mlp_states_{self.timestep}.npy", np.concatenate(mlp_states))
 
         self.mlp_context_frame.append(np.concatenate(mlp_states))
         mlp_combined_context = self.get_mlp_combined_context()
@@ -419,6 +420,7 @@ class SocEnv(gym.Env):
                 project_camera=True,
                 image_size=64,
             )
+            # np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
             if self.timestep % 2 == 0:
                 self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
@@ -503,6 +505,22 @@ class SocEnv(gym.Env):
 
         self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
         self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
+
+        cur_pos = self.people.person_list[0]._state.position
+        dist = np.linalg.norm(cur_pos - self.prev_pos)
+        self.human_motion += dist
+        avg_human_dist = self.human_motion/self.sim_context.current_time
+        print(f"Average human speed : {avg_human_dist} m/s")
+        
+        new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
+        dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
+        self.bot_vel += dist_bot
+        avg_bot_vel = self.bot_vel/self.sim_context.current_time
+        print(f"Average Bot speed : {avg_bot_vel} m/s")
+        print(f"Prev Bot Pos : {prev_bot_pos}")
+        print(f"Current Bot Pos : {new_bot_pos}")
+        print(f"Distance moved by Bot : {dist_bot}")
+        print(f"Distance moved by Human : {dist}")
 
         self.ep_steps += 1
 

@@ -31,7 +31,7 @@ def test_model(algo, model_path, log_path, render, num_episodes=5):
     # with open(log_path, 'w+') as f:
     #     f.write(f"mean_reward={mean_reward:.2f} +/- {std_reward} \n")
 
-    for episode in range(num_episodes):
+    for episode in range(int(num_episodes)):
         obs = env.reset()
         done = False
         total_reward = 0
@@ -57,4 +57,4 @@ if __name__ == '__main__':
     wandb.init(project="Testing_Soc_Nav")
 
     print("Testing Now!")
-    test_model(args.algo, args.model_path, args.num_episodes, args.render, args.log_path)
+    test_model(args.algo, args.model_path, args.log_path, args.render, args.num_episodes)
