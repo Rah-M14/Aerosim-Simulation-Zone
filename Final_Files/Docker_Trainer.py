@@ -58,8 +58,8 @@ class SocEnv(gym.Env):
             "height": 720,
             "sync_loads": True,
             "headless": headless,
-            # "active_gpu": gpus[0],
-            # "physics_gpu": gpus[0],
+            "active_gpu": gpus[0],
+            "physics_gpu": gpus[0],
             "multi_gpu": True,
             "renderer": "RayTracedLighting",
         }
@@ -158,8 +158,8 @@ class SocEnv(gym.Env):
         # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
         # usd_path = self.assets_root_path + current_world_usd
 
-        # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
-        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/home/user5/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        # usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -506,21 +506,21 @@ class SocEnv(gym.Env):
         self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
         self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
 
-        cur_pos = self.people.person_list[0]._state.position
-        dist = np.linalg.norm(cur_pos - self.prev_pos)
-        self.human_motion += dist
-        avg_human_dist = self.human_motion/self.sim_context.current_time
-        print(f"Average human speed : {avg_human_dist} m/s")
+        # cur_pos = self.people.person_list[0]._state.position
+        # dist = np.linalg.norm(cur_pos - self.prev_pos)
+        # self.human_motion += dist
+        # avg_human_dist = self.human_motion/self.sim_context.current_time
+        # print(f"Average human speed : {avg_human_dist} m/s")
         
-        new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
-        dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
-        self.bot_vel += dist_bot
-        avg_bot_vel = self.bot_vel/self.sim_context.current_time
-        print(f"Average Bot speed : {avg_bot_vel} m/s")
-        print(f"Prev Bot Pos : {prev_bot_pos}")
-        print(f"Current Bot Pos : {new_bot_pos}")
-        print(f"Distance moved by Bot : {dist_bot}")
-        print(f"Distance moved by Human : {dist}")
+        # new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
+        # dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
+        # self.bot_vel += dist_bot
+        # avg_bot_vel = self.bot_vel/self.sim_context.current_time
+        # print(f"Average Bot speed : {avg_bot_vel} m/s")
+        # print(f"Prev Bot Pos : {prev_bot_pos}")
+        # print(f"Current Bot Pos : {new_bot_pos}")
+        # print(f"Distance moved by Bot : {dist_bot}")
+        # print(f"Distance moved by Human : {dist}")
 
         self.ep_steps += 1
 
@@ -1234,6 +1234,7 @@ def main():
     except Exception as e:
         print(f"An error occurred during training: {e}")
     finally:
+        print("Can't run!")
         wandb.finish()
         my_env.close()
 
