@@ -124,7 +124,7 @@ class SocEnv(gym.Env):
 
         from New_RL_Bot_Control import RLBotController, RLBotAct, CustomWheelBasePoseController
         from New_RL_Bot import RLBot
-        from Adv_SocRewards_Coll import SocialReward
+        from Final_Files.Adv_SocRewards_Neg import SocialReward
         from Mod_Pegasus_App import PegasusApp
         from LiDAR_Feed import get_licam_image
 

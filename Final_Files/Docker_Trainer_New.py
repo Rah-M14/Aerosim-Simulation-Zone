@@ -147,7 +147,7 @@ class SocEnv(gym.Env):
             RLBotController,
         )
 
-        from Adv_SocRewards_Coll import SocialReward
+        from Adv_SocRewards_Neg import SocialReward
 
         self.assets_root_path = get_assets_root_path()
         if self.assets_root_path is None:

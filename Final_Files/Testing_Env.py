@@ -5,7 +5,7 @@ import torch as th
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
-from Docker_Trainer import SocEnv
+from Final_Files.Docker_Trainer_New import SocEnv
 # import logger
 import wandb
 
