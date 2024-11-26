@@ -4,7 +4,7 @@ WORKDIR /isaac-sim
 
 RUN ln -s exts/omni.isaac.examples/omni/isaac/examples extension_examples
 
-COPY . /isaac-sim/
+COPY . /isaac-sim/.
 
 ARG WAPI_KEY
 ENV WANDB_API_KEY=$WAPI_KEY
@@ -33,9 +33,9 @@ RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
 
 RUN ./python.sh -m wandb login $WANDB_API_KEY
 
-RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit && \
-    mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC && \
-    mv /isaac-sim/Final_WR_World /isaac-sim/standalone_examples/api/omni.isaac.kit 
+RUN mv /isaac-sim/Final_Files/* /isaac-sim/standalone_examples/api/omni.isaac.kit/. && \
+    mv /isaac-sim/configs/* /isaac-sim/exts/omni.isaac.sensor/data/lidar_configs/SLAMTEC/. && \
+    mv /isaac-sim/Final_WR_World /isaac-sim/standalone_examples/api/omni.isaac.kit/. 
 
 CMD ["./python.sh", "/isaac-sim/standalone_examples/api/omni.isaac.kit/Docker_Trainer.py", "--algo", "ppo", "--botname", "jackal", "--headless", "--state_normalize" ]
 
