@@ -4,7 +4,7 @@ from PIL import Image
 from scipy.ndimage import binary_dilation
 
 class RRTStarPlanner:
-    def __init__(self, image_path, xlim=(-10, 10), ylim=(-7, 7), max_iter=5000, step_size=0.1, neighbor_radius=1.0):
+    def __init__(self, image_path, xlim=(-10, 10), ylim=(-7, 7), max_iter=5000, step_size=0.05, neighbor_radius=1.0):
         self.binary_map = self.convert_image_to_binary_map(image_path)
         self.xlim = xlim
         self.ylim = ylim
@@ -140,23 +140,23 @@ def get_final_path(start, goal, edges):
             if edge[1] == current:
                 current = edge[0]
                 break
-        path.append([current, next_pos])
+        path.append(np.array(next_pos))
+    path.append(np.array(start))
     return list(reversed(path))
 
-# if __name__ == "__main__":
-#     image_path = "standalone_examples/api/omni.isaac.kit/WR_World.png"
-#     planner = RRTStarPlanner(image_path)
-#     result = planner.plan()
+if __name__ == "__main__":
+    image_path = "standalone_examples/api/omni.isaac.kit/WR_World.png"
+    planner = RRTStarPlanner(image_path)
+    result = planner.plan(np.array([-7.0,-8.0]), np.array([-8.5, -9.5]))
     
-#     print(f"Start: ({result['start'][0]:.2f}, {result['start'][1]:.2f})")
-#     print(f"Goal: ({result['goal'][0]:.2f}, {result['goal'][1]:.2f})")
-#     print(type(result['path']))
-#     print(result['path'][0])
-#     print(result['path'][0][0])
-#     print(result['path'][0][1])
-#     print(type(result['path'][0][1]))    
+    print(f"Start: ({result['start'][0]:.2f}, {result['start'][1]:.2f})")
+    print(f"Goal: ({result['goal'][0]:.2f}, {result['goal'][1]:.2f})")
+    print(type(result['path']))
+    print(result['path'][0])
+    print(type(result['path'][0]))
 
-#     print("Path:")
-#     for point_pair in result['path']:
-#         start_point, end_point = point_pair
-#         print(f"({start_point[0]:.2f}, {start_point[1]:.2f}) -> ({end_point[0]:.2f}, {end_point[1]:.2f})")
+    print("Path:")
+    # for point_pair in result['path']:
+        # print(point_pair)
+    
+    print(result['path'])

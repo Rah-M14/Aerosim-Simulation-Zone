@@ -29,7 +29,7 @@ RUN git clone https://github.com/PegasusSimulator/PegasusSimulator.git && \
 WORKDIR /isaac-sim
 
 RUN ./python.sh -m pip install --no-cache-dir -r requirements.txt && \
-    ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn shapely
+    ./python.sh -m pip install --no-cache-dir torch torchvision torchaudio wandb stable-baselines3[extra] gym ultralytics scikit-learn shapely shimmy
 
 RUN ./python.sh -m wandb login $WANDB_API_KEY
 
