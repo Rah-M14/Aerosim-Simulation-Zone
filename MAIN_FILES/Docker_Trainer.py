@@ -129,8 +129,8 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
-        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
-        # usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -508,7 +508,6 @@ class SocEnv(gym.Env):
                 )
                 to_point_rew = 0
             elif done_reason == "goal_reached":
-                self.update_curriculum(done_reason == "goal_reached")
                 print("Goal Reached!!!!")
 
         self.logger.info(f"Step: action={action}, reward={reward}, done={done}")

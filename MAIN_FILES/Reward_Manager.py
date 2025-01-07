@@ -119,10 +119,10 @@ class SocNavManager:
         self.reset_episode_rewards()
 
     # CURRICULUM UPDATE
-    def update_curriculum_level(self, level):
-        self.curriculum_level = level
-        self.logger.info(f"Reward system updated to curriculum level {self.curriculum_level}")
-        # wandb.log({"reward_curriculum_level": self.curriculum_level})
+    # def update_curriculum_level(self, level):
+    #     self.curriculum_level = level
+    #     self.logger.info(f"Reward system updated to curriculum level {self.curriculum_level}")
+    #     # wandb.log({"reward_curriculum_level": self.curriculum_level})
 
     def get_total_reward(self):
         self.logger.info(f"Total reward: {self.to_point_rew}")
@@ -151,7 +151,7 @@ class SocNavManager:
         self.episode_length += 1
 
         if self.check_goal_reached(cur_bot_pos, goal_pos):
-            reward_dict['goal_reached_rew'] = self.level_rewards[self.curriculum_level]["goal"]
+            reward_dict['goal_reached_rew'] = self.goal_reward
             self.current_rew = reward_dict['goal_reached_rew']
             self.logger.info(f"Goal reached! Reward: {self.goal_reward}")
         else:

@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: socnav-train
+  name: new-socnav-train
   labels:
-    k8s-app: socnav-train
+    k8s-app: new-socnav-train
 spec:
   replicas: 1
   selector:
     matchLabels:
-      k8s-app: socnav-train
+      k8s-app: new-socnav-train
   template:
     metadata: 
       labels:
-        k8s-app: socnav-train
+        k8s-app: new-socnav-train
     spec:
       imagePullSecrets:
         - name: gitlab-registry-secret
@@ -40,7 +40,7 @@ spec:
           operator: "Exists"
         
       containers:
-      - name: socnav-train
+      - name: new-socnav-train
         image: gitlab-registry.nrp-nautilus.io/tanjidt/socnav
         command: ["sh", "-c", "apt update && sleep infinity"]
         env:
@@ -69,7 +69,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: robonav-1
+            claimName: robonav-2
         - emptyDir:
             medium: Memory
             sizeLimit: "8Gi"         # Reduced size limit for memory volume
