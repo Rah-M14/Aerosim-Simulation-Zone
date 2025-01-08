@@ -373,7 +373,7 @@ class SocEnv(gym.Env):
                 project_camera=True,
                 image_size=env_config.observation.image_size,
             )
-            np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
+            # np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
             if self.timestep % 2 == 0:
                 self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
