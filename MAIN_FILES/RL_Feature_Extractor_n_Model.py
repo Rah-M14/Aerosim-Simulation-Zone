@@ -14,8 +14,7 @@ from stable_baselines3.common.callbacks import (
     ProgressBarCallback,
 )
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
-from stable_baselines3.sac import MultiInputPolicy as SACMultiPolicy
+
 
 th.cuda.empty_cache()
 th.backends.cudnn.benchmark = True
@@ -28,11 +27,12 @@ from gym import spaces
 
 env_config = EnvironmentConfig()
 
+
 class CustomCombinedExtractor(BaseFeaturesExtractor):
     def __init__(
         self,
         observation_space: gym.spaces.Dict,
-        cnn_output_dim = env_config.training.cnn_output_dim,
+        cnn_output_dim=env_config.training.cnn_output_dim,
         algo="ppo",
         mlp_context=env_config.observation.mlp_context_length,
         img_context=env_config.observation.img_context_length,
@@ -52,7 +52,9 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
 
         # self.device = device
 
-        self.vec_lstm = nn.LSTM(env_config.observation.vector_dim, self.vec_lstm_out_size, num_layers=1)
+        self.vec_lstm = nn.LSTM(
+            env_config.observation.vector_dim, self.vec_lstm_out_size, num_layers=1
+        )
         self.img_cnn = nn.Sequential(
             nn.Conv2d(self.img_channels, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
@@ -145,28 +147,3 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         return th.cat(
             encoded_tensor_list, dim=1
         )  # encoded tensor is the batch dimension
-
-
-def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: str):
-    if algo.lower() == "ppo":
-        return PPO(
-            PPOMultiPolicy,
-            my_env,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            n_steps=env_config.training.ppo_config.n_steps,
-            tensorboard_log=tensor_log_dir,
-            **env_config.training.ppo_config
-        )
-    elif algo.lower() == "sac":
-        return SAC(
-            SACMultiPolicy,
-            my_env,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            device=f"cuda:{gpus[0]}",
-            tensorboard_log=tensor_log_dir,
-            **env_config.training.sac_config
-        )
-    else:
-        raise ValueError(f"Unsupported algorithm: {algo}")

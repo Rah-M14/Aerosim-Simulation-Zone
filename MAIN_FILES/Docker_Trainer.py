@@ -19,9 +19,15 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
     ProgressBarCallback,
 )
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
-from stable_baselines3.sac import MultiInputPolicy as SACMultiPolicy
+
+from stable_baselines3.ppo import (
+    MultiInputPolicy as PPOMultiPolicy,
+    MlpPolicy as PPO_MlpPolicy,
+)
+from stable_baselines3.sac import (
+    MultiInputPolicy as SACMultiPolicy,
+    MlpPolicy as SAC_MlpPolicy,
+)
 
 from RL_Feature_Extractor_n_Model import *
 from configs import *
@@ -35,6 +41,7 @@ from gym import spaces
 
 env_config = EnvironmentConfig()
 
+
 class SocEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
 
@@ -46,6 +53,7 @@ class SocEnv(gym.Env):
         gpus,
         logdir,
         headless=False,
+        use_context_window=True,
         mlp_context=env_config.observation.mlp_context_length,
         img_context=env_config.observation.img_context_length,
         skip_frame=env_config.simulation.skip_frame,
@@ -184,7 +192,7 @@ class SocEnv(gym.Env):
 
         # WORLD PARAMETERS
 
-        self.next_pos ,self.next_ori = None, None
+        self.next_pos, self.next_ori = None, None
         self.human_motion = 0
 
         self.world_limits = np.array([20.0, 14.0])
@@ -193,7 +201,7 @@ class SocEnv(gym.Env):
         # self.carter_vel_limits = np.array([7.0, 7.0])
         # self.carter_ang_vel_limits = np.array([np.pi, np.pi])
         self.state_normalize = state_normalize
-        
+
         self.timestep = 0
         self.total_timesteps = 0
         self.frame_num = 0
@@ -205,28 +213,41 @@ class SocEnv(gym.Env):
         self.bot_vel = 0
         self.prev_bots_pos, _ = self.bot.rl_bot.get_world_pose()
 
-        self.bot_l = env_config.robot.RL_length  #Length in metres
+        self.bot_l = env_config.robot.RL_length  # Length in metres
         self.bot_theta = env_config.robot.theta
-        
+
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
-        
+
         self.yolo_model = YOLO("yolo11n.pt")
 
         # RL PARAMETERS
         self.seed(seed)
 
-        mlp_zeros = np.zeros(env_config.observation.vector_dim)
-        self.mlp_context_frame_length = mlp_context
-        self.img_context_frame_length = img_context
-        self.mlp_context_frame = deque(
-            [mlp_zeros for _ in range(self.mlp_context_frame_length)],
-            maxlen=self.mlp_context_frame_length,
-        )
-        self.img_context_frame = deque(
-            [np.zeros((env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size)) for _ in range(self.img_context_frame_length)],
-            maxlen=self.img_context_frame_length,
-        )
+        self.use_context_window = use_context_window
+        self.use_multimodal_input = True
+
+        if use_context_window:
+            mlp_zeros = np.zeros(env_config.observation.vector_dim)
+            self.mlp_context_frame_length = mlp_context
+            self.img_context_frame_length = img_context
+            self.mlp_context_frame = deque(
+                [mlp_zeros for _ in range(self.mlp_context_frame_length)],
+                maxlen=self.mlp_context_frame_length,
+            )
+            self.img_context_frame = deque(
+                [
+                    np.zeros(
+                        (
+                            env_config.observation.channels,
+                            env_config.observation.image_size,
+                            env_config.observation.image_size,
+                        )
+                    )
+                    for _ in range(self.img_context_frame_length)
+                ],
+                maxlen=self.img_context_frame_length,
+            )
 
         self.reward_range = (-float("inf"), float("inf"))
         gym.Env.__init__(self)
@@ -236,23 +257,9 @@ class SocEnv(gym.Env):
             shape=(2,),
             dtype=np.float32,
         )  # (l, theta)
-        self.observation_space = spaces.Dict(
-            {
-                "vector": spaces.Box(
-                    low=-np.inf,
-                    high=np.inf,
-                    shape=(self.mlp_context_frame_length, env_config.observation.vector_dim),
-                    dtype=np.float32,
-                ),
-                "image": spaces.Box(
-                    low=0,
-                    high=1,
-                    shape=(self.img_context_frame_length, env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size),
-                    dtype=np.float32,
-                ),
-            }
+        self.observation_space = self.define_observation_space(
+            use_context_window, use_image=self.use_multimodal_input
         )
-
         self.ep_steps = 0
         self.episode_count = 0
         self.info = {}
@@ -266,8 +273,8 @@ class SocEnv(gym.Env):
         self.logger.info("This is a test log message from __init__")
 
         # REWARD PARAMETERS
-        self.components = ['path', 'boundary']
-        self.method = 'negative'
+        self.components = ["path", "boundary"]
+        self.method = "negative"
         self.reward_manager = SocNavManager(self.components, self.method, self.logdir)
         self.max_episode_length = max_episode_length
 
@@ -279,6 +286,46 @@ class SocEnv(gym.Env):
         # self.success_threshold = 0.85
         # self.episodes_per_level = 100
         # self.reward_manager.update_curriculum_level(self.curriculum_level)
+
+    def define_observation_space(self, use_context_window, use_image=True):
+        vector_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(
+                (self.mlp_context_frame_length, env_config.observation.vector_dim)
+                if use_context_window
+                else (env_config.observation.vector_dim)
+            ),
+            dtype=np.float32,
+        )
+        img_space = spaces.Box(
+            low=0,
+            high=1,
+            shape=(
+                (
+                    self.img_context_frame_length,
+                    env_config.observation.channels,
+                    env_config.observation.image_size,
+                    env_config.observation.image_size,
+                )
+                if use_context_window
+                else (
+                    env_config.observation.channels,
+                    env_config.observation.image_size,
+                    env_config.observation.image_size,
+                )
+            ),
+            dtype=np.float32,
+        )
+        if use_image:
+            return spaces.Dict(
+                {
+                    "vector": vector_space,
+                    "image": img_space,
+                }
+            )
+        else:
+            return vector_space
 
     def setup_logging(self):
         try:
@@ -340,31 +387,44 @@ class SocEnv(gym.Env):
         wandb.log({"episode": self.episode_count})
         return observations
 
-    def get_observations(self):
+    def _get_vector_observation(self):
+        """return both unnormalized and normalized observations"""
         bot_world_pos, bot_world_ori = self.bot.rl_bot.get_world_pose()
         goal_world_pos = self.bot.rl_bot.goal_pose
         timestep = self.timestep
-        mlp_states_un = [bot_world_pos[:2], bot_world_ori, goal_world_pos[:2], timestep]
-        if self.state_normalize == True:
-            mlp_states = [
-                bot_world_pos[:2] / self.world_limits,
-                bot_world_ori / np.linalg.norm(bot_world_ori),
-                goal_world_pos[:2] / self.world_limits,
-                timestep / self.max_episode_length,
-            ]
-            # np.save(f"/home/rahm/TEST/MLP/mlp_states_{self.timestep}.npy", np.concatenate(mlp_states))
 
-        self.mlp_context_frame.append(np.concatenate(mlp_states))
-        mlp_combined_context = self.get_mlp_combined_context()
+        mlp_states = [
+            bot_world_pos[:2] / self.world_limits,
+            bot_world_ori / np.linalg.norm(bot_world_ori),
+            goal_world_pos[:2] / self.world_limits,
+            timestep / self.max_episode_length,
+        ]
 
-        lidar_data = self.bot.get_denoised_lidar_data()
-        camera_data = self.bot.rl_bot_camera.get_rgba()[:, :, :3]
+        return [
+            bot_world_pos[:2],
+            bot_world_ori,
+            goal_world_pos[:2],
+            timestep,
+        ], mlp_states
+
+    def _get_lidar_observation(self):
+        return self.bot.get_denoised_lidar_data()
+
+    def _get_rgb_observation(self):
+        return self.bot.rl_bot_camera.get_rgba()[:, :, :3]
+
+    def _combine_lidar_with_rgb(self, lidar_data, camera_data, mlp_states_un):
         if lidar_data.size == 0:
-            lidar_data = None
-            licam_image = np.zeros((env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size))
-            img_combined_context = th.zeros((self.img_context_frame_length, env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size))
+            licam_image = np.zeros(
+                (
+                    env_config.observation.channels,
+                    env_config.observation.image_size,
+                    env_config.observation.image_size,
+                )
+            )
+
         else:
-            li_cam_image = self.get_li_cam_image(
+            licam_image = self.get_li_cam_image(
                 lidar_data,
                 camera_data,
                 mlp_states_un,
@@ -373,17 +433,49 @@ class SocEnv(gym.Env):
                 project_camera=True,
                 image_size=env_config.observation.image_size,
             )
-            np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
-            if self.timestep % 2 == 0:
-                self.img_context_frame.append(li_cam_image)
-            img_combined_context = self.get_img_combined_context()
+            # np.save(
+            #     f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image
+            # )
+        return licam_image
 
-        return (
-            {"vector": mlp_combined_context, "image": img_combined_context},
-            lidar_data,
-            camera_data,
-            mlp_states,
+    def _append_observation_context_window(self, mlp_states, licam_image):
+        self.mlp_context_frame.append(np.concatenate(mlp_states))
+        if self.timestep % 2 == 0:
+            self.img_context_frame.append(licam_image)
+
+    def get_observations(self):
+        mlp_states_un, mlp_states = self._get_vector_observation()
+        if self.state_normalize == False:
+            mlp_states = mlp_states_un
+
+        lidar_data = self._get_lidar_observation()
+        camera_data = self._get_rgb_observation()
+
+        licam_image = self._combine_lidar_with_rgb(
+            lidar_data=lidar_data, camera_data=camera_data, mlp_states_un=mlp_states_un
         )
+
+        if lidar_data.size == 0:
+            lidar_data = None
+
+        self._append_observation_context_window(mlp_states, licam_image)
+
+        if self.use_context_window:
+            mlp_combined_context = self.get_mlp_combined_context()
+            img_combined_context = self.get_img_combined_context()
+            return (
+                {"vector": mlp_combined_context, "image": img_combined_context},
+                lidar_data,
+                camera_data,
+                mlp_states,
+            )
+        else:
+            return (
+                np.concatenate(mlp_states),
+                lidar_data,
+                camera_data,
+                mlp_states,
+            )
 
     def get_mlp_combined_context(self):
         return th.tensor(np.array(self.mlp_context_frame, dtype=np.float32))
@@ -422,24 +514,25 @@ class SocEnv(gym.Env):
         ]
 
     def next_coords(self, actions, position, orientation):
-        from omni.isaac.core.utils.rotations import quat_to_euler_angles, euler_angles_to_quat
+        from omni.isaac.core.utils.rotations import (
+            quat_to_euler_angles,
+            euler_angles_to_quat,
+        )
 
-        l, theta = actions[0]*self.bot_l, actions[1]*self.bot_theta
+        l, theta = actions[0] * self.bot_l, actions[1] * self.bot_theta
 
         _, _, current_yaw = quat_to_euler_angles(orientation)
         world_theta = current_yaw + theta
-        
-        x1, y1 = l*np.cos(world_theta), l*np.sin(world_theta)
+
+        x1, y1 = l * np.cos(world_theta), l * np.sin(world_theta)
         next_pos = np.array([x1, y1, 0.0])
 
         orien = euler_angles_to_quat(np.array([0.0, 0.0, world_theta]))
-        
+
         return (position + next_pos, orien)
 
-    def step(
-        self, action
-    ):  # action = [l, theta], l in [-0.5, 1] and theta in [-1, 1]
-        wandb.log({"Simulation_timesteps" : self.sim_context.current_time})
+    def step(self, action):  # action = [l, theta], l in [-0.5, 1] and theta in [-1, 1]
+        wandb.log({"Simulation_timesteps": self.sim_context.current_time})
         try:
             prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
         except Exception as e:
@@ -450,15 +543,19 @@ class SocEnv(gym.Env):
                 True,
                 {},
             )
-        
-        action = action*self._dt
+
+        action = action * self._dt
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
 
         self.timestep += 1.0
         self.total_timesteps += 1
 
-        self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
-        self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
+        self.next_pos, self.next_ori = self.next_coords(
+            action, prev_bot_pos, prev_bot_ori
+        )
+        self.bot.rl_bot.set_world_pose(
+            position=self.next_pos, orientation=self.next_ori
+        )
 
         # print(f"Current Time: {self.sim_context.current_time}")
 
@@ -467,7 +564,7 @@ class SocEnv(gym.Env):
         # self.human_motion += dist
         # avg_human_dist = self.human_motion/self.sim_context.current_time
         # print(f"Average human speed : {avg_human_dist} m/s")
-        
+
         # new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
         # dist_bot = np.linalg.norm(new_bot_pos - prev_bot_pos)
         # self.bot_vel += dist_bot
@@ -559,9 +656,41 @@ class SocEnv(gym.Env):
     #         self.level_episodes[self.curriculum_level] = 0
 
     def _gen_goal_pose(self):
-        new_pos = np.array([np.random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
-                            np.random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
-                            0.0])
+        new_pos = np.array(
+            [
+                np.random.choice(
+                    list(
+                        set([x for x in np.linspace(-7.5, 7.6, 10000)])
+                        - set(
+                            y
+                            for y in np.append(
+                                np.linspace(-2.6, -1.7, 900),
+                                np.append(
+                                    np.linspace(-0.8, 0.4, 1200),
+                                    np.append(
+                                        np.linspace(1.5, 2.4, 900),
+                                        np.linspace(3.4, 4.6, 1200),
+                                    ),
+                                ),
+                            )
+                        )
+                    )
+                ),
+                np.random.choice(
+                    list(
+                        set([x for x in np.linspace(-5.5, 5.6, 14000)])
+                        - set(
+                            y
+                            for y in np.append(
+                                np.linspace(-1.5, 2.5, 1000),
+                                np.linspace(-2.5, -5.6, 3100),
+                            )
+                        )
+                    )
+                ),
+                0.0,
+            ]
+        )
         return new_pos
 
     # CURRICULUM GOAL POSE GENERATION
@@ -660,6 +789,7 @@ class SocEnv(gym.Env):
             ]
         )
 
+
 def animated_loading():
     chars = [".", "..", "..."]
     for char in chars:
@@ -723,13 +853,15 @@ class BestModelCallback(BaseCallback):
             )
             self.model.save(gen_path)
 
-            if self.algo == 'SAC':
+            if self.algo == "SAC":
                 replay_buffer_path = os.path.join(
                     self.save_path, f"Latest_SocNav_{self.algo}_Replay_Buffer.pkl"
                 )
                 self.model.save_replay_buffer(replay_buffer_path)
                 if self.verbose > 1:
-                    print(f"Saving model replay buffer checkpoint to {replay_buffer_path}")
+                    print(
+                        f"Saving model replay buffer checkpoint to {replay_buffer_path}"
+                    )
 
             metadata = {"mean_reward": float(mean_reward), "timestamp": time.time()}
             metadata_path = os.path.join(
@@ -801,6 +933,7 @@ class GradientAccumulationCallback(BaseCallback):
                     self.model.ent_coef_optimizer.zero_grad()
         return True
 
+
 def get_checkpoint(algo: str, ckpt_dir: str, best: bool = True):
     pattern = os.path.join(
         ckpt_dir,
@@ -838,6 +971,38 @@ def load_model_and_replay_buffer(
         print(f"Replay buffer loaded from {replay_buffer_path}")
 
     return model
+
+
+def create_model(
+    algo: str,
+    my_env,
+    gpus,
+    policy_kwargs: dict,
+    tensor_log_dir: str,
+    use_feature_extractor=True,
+):
+    if algo.lower() == "ppo":
+        return PPO(
+            PPOMultiPolicy if use_feature_extractor else PPO_MlpPolicy,
+            my_env,
+            policy_kwargs=policy_kwargs,
+            verbose=1,
+            tensorboard_log=tensor_log_dir,
+            **env_config.training.ppo_config,
+        )
+    elif algo.lower() == "sac":
+        return SAC(
+            SACMultiPolicy if use_feature_extractor else SAC_MlpPolicy,
+            my_env,
+            policy_kwargs=policy_kwargs,
+            verbose=1,
+            device=f"cuda:{gpus[0]}",
+            tensorboard_log=tensor_log_dir,
+            **env_config.training.sac_config,
+        )
+    else:
+        raise ValueError(f"Unsupported algorithm: {algo}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
@@ -927,6 +1092,7 @@ def main():
                 mlp_context=args.mlp_context,
                 img_context=args.img_context,
                 logdir=log_dir,
+                use_context_window=False,
             )
 
             print(f"Checkpoint Given to be Loaded : {args.ckpt_path}")
@@ -940,30 +1106,42 @@ def main():
             else:
                 checkpoint_to_load = latest_checkpoint
 
+            # policy_kwargs = {
+            #     "ppo": dict(
+            #         net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])],
+            #         activation_fn=th.nn.Tanh,
+            #         features_extractor_class=CustomCombinedExtractor,
+            #         features_extractor_kwargs=dict(
+            #             cnn_output_dim=256,
+            #             algo="ppo",
+            #             mlp_context=args.mlp_context,
+            #             img_context=args.img_context,
+            #         ),
+            #     ),
+            #     "sac": dict(
+            #         net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]),
+            #         activation_fn=th.nn.ReLU,
+            #         use_sde=False,
+            #         log_std_init=-3,
+            #         features_extractor_class=CustomCombinedExtractor,
+            #         features_extractor_kwargs=dict(
+            #             cnn_output_dim=256,
+            #             algo="sac",
+            #             mlp_context=args.mlp_context,
+            #             img_context=args.img_context,
+            #         ),
+            #     ),
+            # }[args.algo.lower()]
             policy_kwargs = {
                 "ppo": dict(
                     net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])],
                     activation_fn=th.nn.Tanh,
-                    features_extractor_class=CustomCombinedExtractor,
-                    features_extractor_kwargs=dict(
-                        cnn_output_dim=256,
-                        algo="ppo",
-                        mlp_context=args.mlp_context,
-                        img_context=args.img_context,
-                    ),
                 ),
                 "sac": dict(
                     net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]),
                     activation_fn=th.nn.ReLU,
                     use_sde=False,
                     log_std_init=-3,
-                    features_extractor_class=CustomCombinedExtractor,
-                    features_extractor_kwargs=dict(
-                        cnn_output_dim=256,
-                        algo="sac",
-                        mlp_context=args.mlp_context,
-                        img_context=args.img_context,
-                    ),
                 ),
             }[args.algo.lower()]
 
@@ -1040,6 +1218,7 @@ def main():
         print("Can't run!")
         wandb.finish()
         my_env.close()
+
 
 if __name__ == "__main__":
     main()
