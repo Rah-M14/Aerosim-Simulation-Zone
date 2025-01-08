@@ -7,7 +7,7 @@ class SimulationConfig:
     """Simulation-specific configuration parameters"""
     physics_dt: float = 1
     rendering_dt: float = 1
-    max_episode_length: int = 1000
+    max_episode_length: int = 200
     skip_frame: int = 1
     gpu_config: Dict = None
     headless: bool = True
@@ -16,10 +16,10 @@ class SimulationConfig:
     def __post_init__(self):
         if self.simulation_app_config is None:
             self.simulation_app_config = {
+                "headless": self.headless,
                 "width": 1280,
                 "height": 720,
                 "sync_loads": True,
-                "headless": self.headless,
                 "active_gpu": 0,
                 "physics_gpu": 0,
                 "multi_gpu": False,
