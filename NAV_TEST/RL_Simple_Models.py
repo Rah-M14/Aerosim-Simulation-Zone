@@ -154,6 +154,7 @@ def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: s
             my_env,
             policy_kwargs=policy_kwargs,
             verbose=1,
+            n_steps=env_config.training.ppo_config.n_steps,
             tensorboard_log=tensor_log_dir,
             **env_config.training.ppo_config
         )

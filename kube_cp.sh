@@ -16,18 +16,32 @@ read -p "Server's GPU : " sgpu
 # kubectl cp ./Final_Files/Path_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/.
 # kubectl cp ./gl_perpetual.sh $sgpu:/isaac-sim/.
 
-kubectl cp ./MAIN_FILES/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/Docker_Trainer.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/LiDAR_Feed.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/Mod_Pegasus_App.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/New_RL_Bot_Control.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/New_RL_Bot.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/RL_Feature_Extractor_n_Model.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
-kubectl cp ./MAIN_FILES/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/Docker_Trainer.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/LiDAR_Feed.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/Mod_Pegasus_App.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/New_RL_Bot_Control.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/New_RL_Bot.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/RL_Feature_Extractor_n_Model.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
+# kubectl cp ./MAIN_FILES/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
 
-kubectl cp ./nav_test.sh $sgpu:/isaac-sim/.
-kubectl cp ./Final_WR_World/New_Core.usd $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/.
+kubectl cp ./NAV_TEST/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Docker_Trainer.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/LiDAR_Feed.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Mod_Pegasus_App.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/New_RL_Bot_Control.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/New_RL_Bot.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/RL_Feature_Extractor_n_Model.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/RL_Simple_Models.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Test_Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+kubectl cp ./NAV_TEST/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+
+kubectl cp ./base_test.sh $sgpu:/isaac-sim/.
+# kubectl cp ./nav_test.sh $sgpu:/isaac-sim/.
+# kubectl cp ./Final_WR_World/New_Core.usd $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/.
 
 echo "Done Copying"

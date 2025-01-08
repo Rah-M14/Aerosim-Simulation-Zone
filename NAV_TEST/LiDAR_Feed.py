@@ -221,7 +221,7 @@ def get_new_image(lidar_data,
         "goal"
     ]  # Yellow Square for Goal
 
-    # np.save("/home/rahm/TEST/Sample_image.npy", image)
+    np.save("/home/rahm/TEST/Sample_image.npy", image)
     
     image = np.swapaxes(image,0,-1)
     return image/255.0

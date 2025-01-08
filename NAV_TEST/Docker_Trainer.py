@@ -23,6 +23,9 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
 from stable_baselines3.sac import MultiInputPolicy as SACMultiPolicy
 
+from RL_Simple_Models import *
+from configs import *
+
 th.cuda.empty_cache()
 th.backends.cudnn.benchmark = True
 
@@ -30,6 +33,7 @@ import gym
 import numpy as np
 from gym import spaces
 
+env_config = EnvironmentConfig()
 
 class SocEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
@@ -41,28 +45,19 @@ class SocEnv(gym.Env):
         state_normalize,
         gpus,
         logdir,
-        mlp_context,
-        img_context,
-        headless,
-        skip_frame=1,
-        physics_dt=1/2,
-        rendering_dt=1/2,
-        max_episode_length=1000,
+        headless=env_config.simulation.headless,
+        mlp_context=env_config.observation.mlp_context_length,
+        img_context=env_config.observation.img_context_length,
+        skip_frame=env_config.simulation.skip_frame,
+        physics_dt=env_config.simulation.physics_dt,
+        rendering_dt=env_config.simulation.rendering_dt,
+        max_episode_length=env_config.simulation.max_episode_length,
         seed=0,
     ) -> None:
 
         from isaacsim import SimulationApp
 
-        CONFIG = {
-            "width": 1280,
-            "height": 720,
-            "sync_loads": True,
-            "headless": headless,
-            "active_gpu": gpus[0],
-            "physics_gpu": gpus[0],
-            "multi_gpu": False,
-            "renderer": "RayTracedLighting",
-        }
+        CONFIG = env_config.simulation.simulation_app_config
 
         self.kit = SimulationApp(launch_config=CONFIG)
         self._skip_frame = skip_frame
@@ -79,33 +74,22 @@ class SocEnv(gym.Env):
         import omni
         import omni.isaac.core.utils.numpy.rotations as rot_utils
 
-        # from omni.isaac.core.tasks.base_task import BaseTask
         import omni.kit.viewport.utility
 
-        # import omni.anim.navigation.core as nav
         import omni.usd
 
-        # from gymnasium import spaces
         import torch as th
         import torch.nn as nn
         from omni.isaac.core import SimulationContext, World
 
-        # from omni.isaac.core.scenes import Scene
-        # from omni.isaac.core.utils import stage
         from omni.isaac.core.utils.extensions import enable_extension
         from omni.isaac.core.utils.nucleus import get_assets_root_path
         from omni.isaac.core.utils.rotations import quat_to_euler_angles
 
-        # from omni.isaac.wheeled_robots.controllers.wheel_base_pose_controller import WheelBasePoseController
-        # from omni.isaac.core.utils.stage import add_reference_to_stage
-        # from omni.isaac.core.utils.prims import create_prim
-        # from omni.isaac.core.utils.viewports import set_camera_view
         from omni.isaac.core.utils.stage import is_stage_loading
         from omni.isaac.nucleus import get_assets_root_path, is_file
         from stable_baselines3 import PPO
         from ultralytics import YOLO
-
-        # import omni.replicator.core as rep
 
         EXTENSIONS_PEOPLE = [
             "omni.anim.people",
@@ -126,10 +110,9 @@ class SocEnv(gym.Env):
         for ext_people in EXTENSIONS_PEOPLE:
             enable_extension(ext_people)
 
-        # import omni.anim.navigation.core as nav
         self.kit.update()
 
-        from LiDAR_Feed import get_licam_image
+        # from LiDAR_Feed import get_new_image
         from Mod_Pegasus_App import PegasusApp
         from New_RL_Bot import RLBot
         from New_RL_Bot_Control import (
@@ -138,7 +121,7 @@ class SocEnv(gym.Env):
             RLBotController,
         )
 
-        from Adv_SocRewards_Coll import SocialReward
+        from Test_Reward_Manager import SocNavManager
 
         self.assets_root_path = get_assets_root_path()
         if self.assets_root_path is None:
@@ -146,10 +129,7 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
-        # current_world_usd = "omniverse://localhost/Projects/SIMS/PEOPLE_SIMS/New_Core.usd"
-        # usd_path = self.assets_root_path + current_world_usd
-
-        # usd_path = "/home/user5/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
         usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
@@ -183,11 +163,6 @@ class SocEnv(gym.Env):
         self.sim_context = SimulationContext()
         self.timeline = omni.timeline.get_timeline_interface()
         self.world.initialize_physics()
-        print(f"the current physics dt is : {self.world.get_physics_dt()}")
-        print(f"the current rendering dt is : {self.world.get_rendering_dt()}")
-        # self.world.set_physics_step_size(step_size=self._dt * 60) 
-        # self.world.set_gpu_dynamics_enabled(enabled=True)
-        # print("Waiting Room with Physics initialization in the World!")
 
         enable_extension("omni.isaac.debug_draw")
 
@@ -199,17 +174,7 @@ class SocEnv(gym.Env):
             assets_root_path=self.assets_root_path,
             botname=self.botname,
         )
-        # self.core_controller = RLBotController(botname=self.botname)
-        # self.controller = CustomWheelBasePoseController(
-        #     name="cool_controller",
-        #     open_loop_wheel_controller=self.core_controller,
-        #     is_holonomic=False,
-        # )
 
-        # self.act = RLBotAct(self.kit, self.bot.rl_bot, self.controller)
-        # self.world.add_physics_callback(
-        #     "sending_actions", callback_fn=self.send_robot_actions
-        # )
         print("Bot Initialised!")
         inav = omni.anim.navigation.core.acquire_interface()
         print("Navmesh Created!")
@@ -234,29 +199,24 @@ class SocEnv(gym.Env):
         self.frame_num = 0
 
         # BOT PARAMETERS
+        self.cur_pos = 0
         self.prev_pos = self.people.person_list[0]._state.position
         self.cur_pos = self.people.person_list[0]._state.position
         self.bot_vel = 0
         self.prev_bots_pos, _ = self.bot.rl_bot.get_world_pose()
 
-        self.bot_length = 0.508 #Length in metres
-        self.bot_l = self.bot_length*2
-        self.bot_theta = np.pi/9
+        self.bot_l = env_config.robot.RL_length  #Length in metres
+        self.bot_theta = env_config.robot.theta
         
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
         
-        # self.max_velocity = 1.0
-        # self.max_angular_velocity = np.pi * 4
-        # self.act_steps = 5
-        # self.pos_tol = 0.05  # Thiss tolerance should be greater than the position_tol in the controller
-
         self.yolo_model = YOLO("yolo11n.pt")
 
         # RL PARAMETERS
         self.seed(seed)
 
-        mlp_zeros = np.concatenate([np.zeros(2), np.zeros(4), np.zeros(2), np.zeros(1)])
+        mlp_zeros = np.zeros(env_config.observation.vector_dim)
         self.mlp_context_frame_length = mlp_context
         self.img_context_frame_length = img_context
         self.mlp_context_frame = deque(
@@ -264,7 +224,7 @@ class SocEnv(gym.Env):
             maxlen=self.mlp_context_frame_length,
         )
         self.img_context_frame = deque(
-            [np.zeros((3, 64, 64)) for _ in range(self.img_context_frame_length)],
+            [np.zeros((env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size)) for _ in range(self.img_context_frame_length)],
             maxlen=self.img_context_frame_length,
         )
 
@@ -281,13 +241,13 @@ class SocEnv(gym.Env):
                 "vector": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(self.mlp_context_frame_length, 9),
+                    shape=(self.mlp_context_frame_length, env_config.observation.vector_dim),
                     dtype=np.float32,
                 ),
                 "image": spaces.Box(
                     low=0,
                     high=1,
-                    shape=(self.img_context_frame_length, 3, 64, 64),
+                    shape=(self.img_context_frame_length, env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size),
                     dtype=np.float32,
                 ),
             }
@@ -306,17 +266,19 @@ class SocEnv(gym.Env):
         self.logger.info("This is a test log message from __init__")
 
         # REWARD PARAMETERS
-        self.reward_manager = SocialReward(self.logdir)
+        self.components = ['path', 'boundary']
+        self.method = 'negative'
+        self.reward_manager = SocNavManager(self.components, self.method, self.logdir)
         self.max_episode_length = max_episode_length
 
-        # CURRICULUM APPROACH PARAMETERS5, -np.pi
-        self.curriculum_level = 4
-        self.level_thresholds = {1: 3.0, 2: 7.0, 3: 11.0, 4: float("inf")}
-        self.level_success_rate = {1: 0, 2: 0, 3: 0, 4: 0}
-        self.level_episodes = {1: 0, 2: 0, 3: 0, 4: 0}
-        self.success_threshold = 0.85
-        self.episodes_per_level = 100
-        self.reward_manager.update_curriculum_level(self.curriculum_level)
+        # # CURRICULUM APPROACH PARAMETERS5, -np.pi
+        # self.curriculum_level = 4
+        # self.level_thresholds = {1: 3.0, 2: 7.0, 3: 11.0, 4: float("inf")}
+        # self.level_success_rate = {1: 0, 2: 0, 3: 0, 4: 0}
+        # self.level_episodes = {1: 0, 2: 0, 3: 0, 4: 0}
+        # self.success_threshold = 0.85
+        # self.episodes_per_level = 100
+        # self.reward_manager.update_curriculum_level(self.curriculum_level)
 
     def setup_logging(self):
         try:
@@ -399,8 +361,8 @@ class SocEnv(gym.Env):
         camera_data = self.bot.rl_bot_camera.get_rgba()[:, :, :3]
         if lidar_data.size == 0:
             lidar_data = None
-            licam_image = np.zeros((3, 64, 64))
-            img_combined_context = th.zeros((self.img_context_frame_length, 3, 64, 64))
+            licam_image = np.zeros((env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size))
+            img_combined_context = th.zeros((self.img_context_frame_length, env_config.observation.channels, env_config.observation.image_size, env_config.observation.image_size))
         else:
             li_cam_image = self.get_li_cam_image(
                 lidar_data,
@@ -409,9 +371,9 @@ class SocEnv(gym.Env):
                 self.yolo_model,
                 self.world_min_max,
                 project_camera=True,
-                image_size=64,
+                image_size=env_config.observation.image_size,
             )
-            # np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
+            np.save(f"/home/rahm/TEST/IMG/Sample_image_{self.timestep}.npy", li_cam_image)
             if self.timestep % 2 == 0:
                 self.img_context_frame.append(li_cam_image)
             img_combined_context = self.get_img_combined_context()
@@ -437,11 +399,11 @@ class SocEnv(gym.Env):
         yolo_model,
         world_min_max,
         project_camera=False,
-        image_size=64,
+        image_size=env_config.observation.image_size,
     ):
-        from LiDAR_Feed import get_licam_image
+        from LiDAR_Feed import get_new_image
 
-        return get_licam_image(
+        return get_new_image(
             lidar_data,
             camera_image,
             mlp_obs,
@@ -489,6 +451,7 @@ class SocEnv(gym.Env):
                 {},
             )
         
+        action = action*self._dt
         prev_bot_pos, prev_bot_ori = self.bot.rl_bot.get_world_pose()
 
         self.timestep += 1.0
@@ -497,14 +460,16 @@ class SocEnv(gym.Env):
         self.next_pos, self.next_ori = self.next_coords(action, prev_bot_pos, prev_bot_ori)
         self.bot.rl_bot.set_world_pose(position=self.next_pos, orientation=self.next_ori)
 
-        # cur_pos = self.people.person_list[0]._state.position
-        # dist = np.linalg.norm(cur_pos - self.prev_pos)
+        # print(f"Current Time: {self.sim_context.current_time}")
+
+        # self.cur_pos = self.people.person_list[0]._state.position
+        # dist = np.linalg.norm(self.cur_pos - self.prev_pos)
         # self.human_motion += dist
         # avg_human_dist = self.human_motion/self.sim_context.current_time
         # print(f"Average human speed : {avg_human_dist} m/s")
         
         # new_bot_pos, new_bot_ori = self.bot.rl_bot.get_world_pose()
-        # dist_bot = np.linalg.norm(new_bot_pos - self.prev_bots_pos)
+        # dist_bot = np.linalg.norm(new_bot_pos - prev_bot_pos)
         # self.bot_vel += dist_bot
         # avg_bot_vel = self.bot_vel/self.sim_context.current_time
         # print(f"Average Bot speed : {avg_bot_vel} m/s")
@@ -512,6 +477,8 @@ class SocEnv(gym.Env):
         # print(f"Current Bot Pos : {new_bot_pos}")
         # print(f"Distance moved by Bot : {dist_bot}")
         # print(f"Distance moved by Human : {dist}")
+
+        self.prev_pos = self.cur_pos
 
         self.ep_steps += 1
 
@@ -523,38 +490,28 @@ class SocEnv(gym.Env):
         self.info["lidar_data"] = lidar_data
         self.info["camera_data"] = camera_data
 
-        reward, to_point_rew, reward_dict, ep_rew_dict = (
-            self.reward_manager.compute_reward(
-                prev_bot_pos[:2], mlp_obs[0], mlp_obs[-2], lidar_data
-            )
-        )
+        reward, reward_dict = (self.reward_manager.compute_reward(prev_bot_pos[:2], mlp_obs[0], mlp_obs[-2], lidar_data))
         done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[-1])
         if done:
             if done_reason == "timeout":
-                reward = self.reward_manager.timeout_penalty
+                reward += self.reward_manager.timeout_penalty
                 wandb.log({"timeout": self.reward_manager.timeout_penalty})
-                to_point_rew = 0
             elif done_reason == "boundary_collision":
                 reward += self.reward_manager.boundary_coll_penalty
-                wandb.log(
-                    {"boundary_collision": self.reward_manager.boundary_coll_penalty}
-                )
-                to_point_rew = 0
+                wandb.log({"boundary_collision": self.reward_manager.boundary_coll_penalty})
             elif done_reason == "goal_reached":
-                self.update_curriculum(done_reason == "goal_reached")
-                print("Goal Reached!!!!")
+                reward += self.reward_manager.goal_reward
+                wandb.log({"goal_reached": self.reward_manager.goal_reward})
+                print("Goal Reached!!!")
+
+        wandb.log(reward_dict)
+        _, ep_reward_dict = self.reward_manager.update_ep_rewards(reward_dict)
+        wandb.log(ep_reward_dict)
 
         self.logger.info(f"Step: action={action}, reward={reward}, done={done}")
-        wandb.log(
-            {
-                "L": action[0],
-                "Theta": action[1],
-                "step_reward": reward,
-                "to_point_reward": to_point_rew,
-                "step_total_timesteps": self.total_timesteps,
-            }
-        )
-        wandb.log(self.reward_manager.ep_reward_dict)
+        wandb.log({"L": action[0],
+                   "Theta": action[1],
+                   "step_total_timesteps": self.total_timesteps})
 
         return observations, reward, done, self.info
 
@@ -563,94 +520,101 @@ class SocEnv(gym.Env):
             self.logger.info("Episode timed out")
             wandb.log({"timeout": 0})
             return True, "timeout"
+        if self.reward_manager.check_boundary(cur_bot_pos):
+            self.logger.info("Boundary collision detected")
+            wandb.log({"goal_reached": 0})
+            return True, "boundary_collision"
         if self.reward_manager.check_goal_reached(cur_bot_pos, goal_pos):
             self.logger.info("Goal reached")
             wandb.log({"boundary_collision": 0})
             return True, "goal_reached"
-        if self.reward_manager.check_boundary(cur_bot_pos):
-            self.logger.info("Boundary collision detected")
-            return True, "boundary_collision"
         return False, None
 
-    def update_curriculum(self, success):
-        self.level_episodes[self.curriculum_level] += 1
-        if success:
-            self.level_success_rate[self.curriculum_level] += 1
+    # def update_curriculum(self, success):
+    #     self.level_episodes[self.curriculum_level] += 1
+    #     if success:
+    #         self.level_success_rate[self.curriculum_level] += 1
 
-        if self.level_episodes[self.curriculum_level] >= self.episodes_per_level:
-            success_rate = (
-                self.level_success_rate[self.curriculum_level]
-                / self.level_episodes[self.curriculum_level]
-            )
-            if success_rate >= self.success_threshold and self.curriculum_level < 4:
-                self.curriculum_level += 1
-                self.reward_manager.update_curriculum_level(self.curriculum_level)
-                print(f"Curriculum being updated to : {self.curriculum_level}")
-                self.logger.info(f"Moving to curriculum level {self.curriculum_level}")
-                wandb.log({"curriculum_level": self.curriculum_level})
+    #     if self.level_episodes[self.curriculum_level] >= self.episodes_per_level:
+    #         success_rate = (
+    #             self.level_success_rate[self.curriculum_level]
+    #             / self.level_episodes[self.curriculum_level]
+    #         )
+    #         if success_rate >= self.success_threshold and self.curriculum_level < 4:
+    #             self.curriculum_level += 1
+    #             self.reward_manager.update_curriculum_level(self.curriculum_level)
+    #             print(f"Curriculum being updated to : {self.curriculum_level}")
+    #             self.logger.info(f"Moving to curriculum level {self.curriculum_level}")
+    #             wandb.log({"curriculum_level": self.curriculum_level})
 
-            self.level_success_rate[self.curriculum_level] = 0
-            self.level_episodes[self.curriculum_level] = 0
+    #         self.level_success_rate[self.curriculum_level] = 0
+    #         self.level_episodes[self.curriculum_level] = 0
+
+    def _gen_goal_pose(self):
+        new_pos = np.array([np.random.choice(list(set([x for x in np.linspace(-7.5, 7.6, 10000)]) - set(y for y in np.append(np.linspace(-2.6,-1.7,900), np.append(np.linspace(-0.8,0.4,1200), np.append(np.linspace(1.5,2.4,900), np.linspace(3.4,4.6,1200))))))),
+                            np.random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100))))),
+                            0.0])
+        return new_pos
 
     # CURRICULUM GOAL POSE GENERATION
-    def _gen_goal_pose(self):
-        import random
+    # def _gen_goal_pose(self):
+    #     import random
 
-        max_attempts = 100
-        for _ in range(max_attempts):
-            new_pos = np.array(
-                [
-                    random.choice(
-                        list(
-                            set([x for x in np.linspace(-7.5, 7.6, 10000)])
-                            - set(
-                                y
-                                for y in np.append(
-                                    np.linspace(-2.6, -1.7, 900),
-                                    np.append(
-                                        np.linspace(-0.8, 0.4, 1200),
-                                        np.append(
-                                            np.linspace(1.5, 2.4, 900),
-                                            np.linspace(3.4, 4.6, 1200),
-                                        ),
-                                    ),
-                                )
-                            )
-                        )
-                    ),
-                    random.choice(
-                        list(
-                            set([x for x in np.linspace(-5.5, 5.6, 14000)])
-                            - set(
-                                y
-                                for y in np.append(
-                                    np.linspace(-1.5, 2.5, 1000),
-                                    np.linspace(-2.5, -5.6, 3100),
-                                )
-                            )
-                        )
-                    ),
-                    0.0,
-                ]
-            )
+    #     max_attempts = 100
+    #     for _ in range(max_attempts):
+    #         new_pos = np.array(
+    #             [
+    #                 random.choice(
+    #                     list(
+    #                         set([x for x in np.linspace(-7.5, 7.6, 10000)])
+    #                         - set(
+    #                             y
+    #                             for y in np.append(
+    #                                 np.linspace(-2.6, -1.7, 900),
+    #                                 np.append(
+    #                                     np.linspace(-0.8, 0.4, 1200),
+    #                                     np.append(
+    #                                         np.linspace(1.5, 2.4, 900),
+    #                                         np.linspace(3.4, 4.6, 1200),
+    #                                     ),
+    #                                 ),
+    #                             )
+    #                         )
+    #                     )
+    #                 ),
+    #                 random.choice(
+    #                     list(
+    #                         set([x for x in np.linspace(-5.5, 5.6, 14000)])
+    #                         - set(
+    #                             y
+    #                             for y in np.append(
+    #                                 np.linspace(-1.5, 2.5, 1000),
+    #                                 np.linspace(-2.5, -5.6, 3100),
+    #                             )
+    #                         )
+    #                     )
+    #                 ),
+    #                 0.0,
+    #             ]
+    #         )
 
-            if (
-                np.linalg.norm(new_pos[:2] - self.bot.rl_bot.start_pose[0][:2])
-                <= self.level_thresholds[self.curriculum_level]
-            ):
-                return new_pos
+    #         if (
+    #             np.linalg.norm(new_pos[:2] - self.bot.rl_bot.start_pose[0][:2])
+    #             <= self.level_thresholds[self.curriculum_level]
+    #         ):
+    #             return new_pos
 
-        direction = (np.random.rand(2) - 0.5) * 2
-        direction /= np.linalg.norm(direction)
-        return np.array(
-            [
-                self.bot.rl_bot.start_pose[0][0]
-                + (direction[0] * self.level_thresholds[self.curriculum_level]),
-                self.bot.rl_bot.start_pose[0][1]
-                + (direction[1] * self.level_thresholds[self.curriculum_level]),
-                0.0,
-            ]
-        )
+    #     direction = (np.random.rand(2) - 0.5) * 2
+    #     direction /= np.linalg.norm(direction)
+    #     return np.array(
+    #         [
+    #             self.bot.rl_bot.start_pose[0][0]
+    #             + (direction[0] * self.level_thresholds[self.curriculum_level]),
+    #             self.bot.rl_bot.start_pose[0][1]
+    #             + (direction[1] * self.level_thresholds[self.curriculum_level]),
+    #             0.0,
+    #         ]
+    #     )
 
     def seed(self, seed=None):
         self.np_random, seed = gym.utils.seeding.np_random(seed)
@@ -687,7 +651,6 @@ class SocEnv(gym.Env):
                 ],
             ]
         )
-
 
 def animated_loading():
     chars = [".", "..", "..."]
@@ -830,126 +793,6 @@ class GradientAccumulationCallback(BaseCallback):
                     self.model.ent_coef_optimizer.zero_grad()
         return True
 
-
-class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(
-        self,
-        observation_space: gym.spaces.Dict,
-        cnn_output_dim: int = 256,
-        algo="ppo",
-        mlp_context=32,
-        img_context=16,
-    ):
-        super(CustomCombinedExtractor, self).__init__(
-            observation_space, features_dim=2
-        )  # Placeholder Feature dims for PyTorch call
-        import torch.nn as nn
-
-        self._observation_space = observation_space
-        self.mlp_context = mlp_context
-        self.img_context = img_context
-        self.img_channels = 3
-        self.vec_lstm_out_size = 32
-        self.img_lstm_out_size = 128
-        self.n_flatten_size = 256
-
-        # self.device = device
-
-        self.vec_lstm = nn.LSTM(9, self.vec_lstm_out_size, num_layers=1)
-        self.img_cnn = nn.Sequential(
-            nn.Conv2d(self.img_channels, 32, kernel_size=8, stride=4, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding="same"),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
-            nn.MaxPool2d(kernel_size=3, stride=1, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding="same"),
-            nn.MaxPool2d(kernel_size=2, stride=1, padding=0),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-        self.img_lstm = nn.LSTM(
-            self.n_flatten_size, self.img_lstm_out_size, num_layers=2
-        )
-
-        total_concat_size = 0
-        for key, subspace in observation_space.spaces.items():
-            if algo == "ppo":
-                if key == "vector":
-                    total_concat_size += self.vec_lstm_out_size
-                elif key == "image":
-                    total_concat_size += self.img_lstm_out_size
-
-            elif algo == "sac":
-                if key == "vector":
-                    total_concat_size += self.vec_lstm_out_size
-                elif key == "image":
-                    total_concat_size += self.img_lstm_out_size
-
-        self._features_dim = total_concat_size
-
-    def get_device(self, network):
-        return next(network.parameters()).device
-
-    def forward(self, observations) -> th.Tensor:
-        encoded_tensor_list = []
-
-        model_device = self.get_device(self.img_lstm)
-
-        for key, subspace in self._observation_space.spaces.items():
-            if key == "vector":
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0)
-                    # print("vec device nb", core_in.device)
-                    lstm_out = self.vec_lstm(core_in)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = (
-                        observations[key].view(self.mlp_context, -1, 9).to(model_device)
-                    )
-                    # print("vec device batch", core_in.device)
-                    lstm_out = self.vec_lstm(core_in)[1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
-
-            else:
-                if observations[key].shape[0] == 1:
-                    core_in = observations[key].squeeze(0)
-                    # print("img device nb", core_in.device)
-                    core_out = self.img_cnn(core_in)
-                    lstm_out = self.img_lstm(core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1].unsqueeze(0))
-                else:
-                    core_in = observations[key].to(model_device)
-                    # print("img device batch", core_in.device)
-                    batch_size = core_in.shape[0]
-                    mini_batch_size = 32
-                    num_mini_batches = batch_size // mini_batch_size
-                    core_in = core_in.view(
-                        num_mini_batches, mini_batch_size, -1, 3, 64, 64
-                    )
-
-                    core_out_n = []
-                    for i in range(num_mini_batches):
-                        cnn_out = self.img_cnn(core_in[i].view(-1, 3, 64, 64))
-                        core_out_n.append(
-                            cnn_out.view(
-                                mini_batch_size, self.img_context, 256
-                            ).swapaxes(0, 1)
-                        )
-
-                    core_out = th.cat(core_out_n, dim=1)
-
-                    lstm_out = self.img_lstm(core_out)[-1][0]
-                    encoded_tensor_list.append(lstm_out[-1])
-
-        return th.cat(
-            encoded_tensor_list, dim=1
-        )  # encoded tensor is the batch dimension
-
-
 def get_checkpoint(algo: str, ckpt_dir: str, best: bool = True):
     pattern = os.path.join(
         ckpt_dir,
@@ -988,55 +831,6 @@ def load_model_and_replay_buffer(
 
     return model
 
-
-def create_model(algo: str, my_env, gpus, policy_kwargs: dict, tensor_log_dir: str):
-    if algo.lower() == "ppo":
-        return PPO(
-            PPOMultiPolicy,
-            my_env,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            n_steps=2048,
-            batch_size=256,
-            learning_rate=3e-4,
-            gamma=0.99,
-            ent_coef=0.1,
-            clip_range=0.3,
-            n_epochs=20,
-            device=f"cuda:{gpus[0]}",
-            gae_lambda=1.0,
-            max_grad_norm=0.9,
-            vf_coef=0.95,
-            use_sde=False,
-            tensorboard_log=tensor_log_dir,
-        )
-    elif algo.lower() == "sac":
-        return SAC(
-            SACMultiPolicy,
-            my_env,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            buffer_size=10000,
-            learning_rate=3e-4,
-            gamma=0.99,
-            batch_size=512,
-            tau=0.005,
-            ent_coef="auto_0.1",
-            target_update_interval=1,
-            train_freq=(1, "episode"),
-            gradient_steps=-1,
-            learning_starts=1,
-            use_sde=False,
-            sde_sample_freq=-1,
-            use_sde_at_warmup=False,
-            optimize_memory_usage=False,
-            device=f"cuda:{gpus[0]}",
-            tensorboard_log=tensor_log_dir,
-        )
-    else:
-        raise ValueError(f"Unsupported algorithm: {algo}")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Train Omni Isaac SocNav Agent")
     parser.add_argument(
@@ -1069,7 +863,7 @@ def main():
     parser.add_argument(
         "--storage_path",
         type=str,
-        default="/data/SocNav_Logs",
+        default="~/SN_Logs",
         help="Choose the path to store teh logs and ckpts",
     )
     parser.add_argument(
@@ -1077,7 +871,7 @@ def main():
         "--gpu",
         nargs="+",
         type=int,
-        help="Specofy the [Active Gpu/Model Gpu, Physics GPU]",
+        help="Specify the [Active Gpu/Model Gpu, Physics GPU]",
         required=True,
     )
     parser.add_argument(
@@ -1142,26 +936,26 @@ def main():
                 "ppo": dict(
                     net_arch=[dict(pi=[256, 512, 512, 256], vf=[256, 512, 512, 256])],
                     activation_fn=th.nn.Tanh,
-                    features_extractor_class=CustomCombinedExtractor,
-                    features_extractor_kwargs=dict(
-                        cnn_output_dim=256,
-                        algo="ppo",
-                        mlp_context=args.mlp_context,
-                        img_context=args.img_context,
-                    ),
+                    # features_extractor_class=CustomCombinedExtractor,
+                    # features_extractor_kwargs=dict(
+                    #     cnn_output_dim=256,
+                    #     algo="ppo",
+                    #     mlp_context=args.mlp_context,
+                    #     img_context=args.img_context,
+                    # ),
                 ),
                 "sac": dict(
                     net_arch=dict(pi=[256, 512, 512, 256], qf=[256, 512, 512, 256]),
                     activation_fn=th.nn.ReLU,
                     use_sde=False,
                     log_std_init=-3,
-                    features_extractor_class=CustomCombinedExtractor,
-                    features_extractor_kwargs=dict(
-                        cnn_output_dim=256,
-                        algo="sac",
-                        mlp_context=args.mlp_context,
-                        img_context=args.img_context,
-                    ),
+                    # features_extractor_class=CustomCombinedExtractor,
+                    # features_extractor_kwargs=dict(
+                    #     cnn_output_dim=256,
+                    #     algo="sac",
+                    #     mlp_context=args.mlp_context,
+                    #     img_context=args.img_context,
+                    # ),
                 ),
             }[args.algo.lower()]
 
@@ -1188,7 +982,7 @@ def main():
 
             checkpoint_callback = IncrementalCheckpointCallback(
                 algo=args.algo,
-                save_freq=2000,
+                save_freq=200,
                 save_path=ckpt_log_dir,
                 name_prefix=f"SocNav_{args.algo.upper()}_ckpt",
             )
