@@ -17,6 +17,8 @@ import random
 class RLBot():
     def __init__(self, simulation_app, world, botname, timeline=None, assets_root_path=None):
 
+        self.rl_bot_ori = np.array([0.0])
+
         if botname.lower() == "carter":
             self.kit = simulation_app
             self.world = world
@@ -216,7 +218,8 @@ class RLBot():
         valid_pos_y = random.choice(list(set([x for x in np.linspace(-5.5, 5.6, 14000)]) - set(y for y in np.append(np.linspace(-1.5,2.5,1000), np.linspace(-2.5,-5.6,3100)))))
         new_pos = np.array([valid_pos_x, valid_pos_y, 0.0])
 
-        yaw_angle = random.uniform(0, 2 * np.pi)
-        orientation = np.array([np.cos(yaw_angle / 2), 0, 0, np.sin(yaw_angle / 2)])
-        self.rl_bot.set_default_state(position=new_pos, orientation=orientation)
+        # yaw_angle = random.uniform(0, 2 * np.pi)
+        # orientation = np.array([np.cos(yaw_angle / 2), 0, 0, np.sin(yaw_angle / 2)])
+        self.rl_bot.set_default_state(position=new_pos, orientation=np.array([0,0,0,1]))
+        self.rl_bot_ori = np.array([0.0])
         print("Bot is Reset!")

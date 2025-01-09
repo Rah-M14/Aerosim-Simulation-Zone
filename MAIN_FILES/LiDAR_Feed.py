@@ -181,16 +181,18 @@ def quaternion_to_rotation_matrix(ori):
     )
 
 def get_new_image(lidar_data, 
-                  camera_image, 
-                  mlp_obs, yolo_model, 
+                  camera_image,
+                  orien,
+                  mlp_obs, 
+                  yolo_model, 
                   world_min_max, 
                   project_camera=True, 
                   image_size=env_config.observation.image_size):
     if lidar_data.size == 0:
         return None, None
     pos = mlp_obs[0]
-    ori = mlp_obs[1]
-    goal_pos = mlp_obs[-2]
+    ori = orien
+    goal_pos = mlp_obs[1]
 
     normalized_pos = (pos[:2] - world_min_max[:2]) / (world_min_max[2:] - world_min_max[:2])
     normalized_goal = (goal_pos[:2] - world_min_max[:2]) / (world_min_max[2:] - world_min_max[:2])
@@ -221,17 +223,17 @@ def get_new_image(lidar_data,
         "goal"
     ]  # Yellow Square for Goal
 
-    # np.save("/home/rahm/TEST/Sample_image.npy", image)
+    np.save("/home/rahm/TEST/Sample_image.npy", image)
     
     image = np.swapaxes(image,0,-1)
     return image/255.0
 
-def get_licam_image(lidar_data, camera_image, mlp_obs, yolo_model, world_min_max, project_camera=True, image_size=env_config.observation.image_size):
+def get_licam_image(lidar_data, camera_image, orien, mlp_obs, yolo_model, world_min_max, project_camera=True, image_size=env_config.observation.image_size):
     if lidar_data.size == 0:
         return None, None
     pos = mlp_obs[0]
-    ori = mlp_obs[1]
-    goal_pos = mlp_obs[-2]
+    ori = orien
+    goal_pos = mlp_obs[1]
 
     quat_matrix = quaternion_to_rotation_matrix(ori)
     rotated_data = np.dot(lidar_data[:, :2], quat_matrix[:2, :2].T)

@@ -52,8 +52,10 @@ class SocEnv(gym.Env):
         state_normalize,
         gpus,
         logdir,
-        headless=False,
-        use_context_window=True,
+        headless=env_config.simulation.headless,
+        use_path = env_config.observation.use_path,
+        use_context_window=False,
+        use_image=False,
         mlp_context=env_config.observation.mlp_context_length,
         img_context=env_config.observation.img_context_length,
         skip_frame=env_config.simulation.skip_frame,
@@ -129,7 +131,9 @@ class SocEnv(gym.Env):
             RLBotController,
         )
 
-        from Reward_Manager import SocNavManager
+        from Test_Reward_Manager import SocNavManager
+        from Path_Manager import PathManager
+
 
         self.assets_root_path = get_assets_root_path()
         if self.assets_root_path is None:
@@ -137,8 +141,8 @@ class SocEnv(gym.Env):
             self.kit.close()
             sys.exit()
 
-        # usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
-        usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        usd_path = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
+        # usd_path = "/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/New_Core.usd"
 
         try:
             result = is_file(usd_path)
@@ -218,16 +222,20 @@ class SocEnv(gym.Env):
 
         self.bot.rl_bot.start_pose = None
         self.bot.rl_bot.goal_pose = None
+        self.orien = None
 
         self.yolo_model = YOLO("yolo11n.pt")
+
+        # PATH MANAGER
+        self.path_manager = PathManager(image_path="standalone_examples/api/omni.isaac.kit/MAIN_FILES/New_WR_World.png", chunk_size=env_config.observation.chunk_size)
 
         # RL PARAMETERS
         self.seed(seed)
 
         self.use_context_window = use_context_window
-        self.use_multimodal_input = True
+        self.use_multimodal_input = use_image
 
-        if use_context_window:
+        if self.use_context_window:
             mlp_zeros = np.zeros(env_config.observation.vector_dim)
             self.mlp_context_frame_length = mlp_context
             self.img_context_frame_length = img_context
@@ -287,14 +295,14 @@ class SocEnv(gym.Env):
         # self.episodes_per_level = 100
         # self.reward_manager.update_curriculum_level(self.curriculum_level)
 
-    def define_observation_space(self, use_context_window, use_image=True):
+    def define_observation_space(self, use_context_window, use_image=False):
         vector_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
             shape=(
                 (self.mlp_context_frame_length, env_config.observation.vector_dim)
                 if use_context_window
-                else (env_config.observation.vector_dim)
+                else (1, env_config.observation.vector_dim)
             ),
             dtype=np.float32,
         )
@@ -325,7 +333,11 @@ class SocEnv(gym.Env):
                 }
             )
         else:
-            return vector_space
+            return spaces.Dict(
+                {
+                    "vector": vector_space
+                }
+            )
 
     def setup_logging(self):
         try:
@@ -380,7 +392,21 @@ class SocEnv(gym.Env):
         if not self.headless:
             print(f"Goal Pose: {self.bot.rl_bot.goal_pose}")
 
-        observations, _, _, _ = self.get_observations()
+        self.path_manager.reset()
+        self.path_manager.plan_new_path(self.bot.rl_bot.start_pose[0][:2], self.bot.rl_bot.goal_pose[:2])
+        
+        if len(self.path_manager.current_path) == 0:
+            print(f"Path is empty, resetting path manager and obtaining a New Path")
+            self.bot.bot_reset()
+            self.path_manager.plan_new_path(self.bot.rl_bot.start_pose[0][:2], self.bot.rl_bot.goal_pose[:2])
+            self.path_manager.get_next_chunk(self.bot.rl_bot.start_pose[0][:2])
+
+        self.path_manager.get_next_chunk(self.bot.rl_bot.start_pose[0][:2])
+
+        # for coords in self.path_manager.new_chunk:
+        #     print(coords)
+
+        observations, _, _, _, _ = self.get_observations()
         self.ep_steps = 0
 
         self.logger.info(f"Episode {self.episode_count} started")
@@ -391,21 +417,45 @@ class SocEnv(gym.Env):
         """return both unnormalized and normalized observations"""
         bot_world_pos, bot_world_ori = self.bot.rl_bot.get_world_pose()
         goal_world_pos = self.bot.rl_bot.goal_pose
+        relative_theta = np.array([np.arccos(np.dot(bot_world_pos, self.bot.rl_bot.goal_pose)/(np.linalg.norm(bot_world_pos)*np.linalg.norm(self.bot.rl_bot.goal_pose)))])
+        chunk = self.path_manager.get_next_chunk(bot_world_pos[:2])
         timestep = self.timestep
+
+        new_chunk = None
+        if chunk.shape[0] != env_config.observation.chunk_size:
+            # print(f"Chunk Padding Required...")
+            new_chunk = np.pad(chunk,
+            pad_width=((0, env_config.observation.chunk_size - chunk.shape[0]), (0, 0)),
+            mode='edge'
+        )
+            new_chunk_norm = new_chunk / self.world_limits
+            chunk_flat = np.array(new_chunk).flatten()
+            chunk_flat_norm = np.array(new_chunk_norm).flatten()
+        else:
+            chunk_norm = chunk / self.world_limits
+            chunk_flat = np.array(chunk).flatten()
+            chunk_flat_norm = np.array(chunk_norm).flatten()
+
 
         mlp_states = [
             bot_world_pos[:2] / self.world_limits,
-            bot_world_ori / np.linalg.norm(bot_world_ori),
             goal_world_pos[:2] / self.world_limits,
+            # bot_world_ori / np.linalg.norm(bot_world_ori),
+            relative_theta/np.pi,
+            self.bot.rl_bot_ori/(2*np.pi),
+            chunk_flat_norm,
             timestep / self.max_episode_length,
         ]
 
         return [
             bot_world_pos[:2],
-            bot_world_ori,
             goal_world_pos[:2],
+            # bot_world_ori,
+            relative_theta,
+            self.bot.rl_bot_ori,
+            chunk_flat,
             timestep,
-        ], mlp_states
+        ], mlp_states, chunk if new_chunk is None else new_chunk
 
     def _get_lidar_observation(self):
         return self.bot.get_denoised_lidar_data()
@@ -427,6 +477,7 @@ class SocEnv(gym.Env):
             licam_image = self.get_li_cam_image(
                 lidar_data,
                 camera_data,
+                self.orien,
                 mlp_states_un,
                 self.yolo_model,
                 self.world_min_max,
@@ -444,7 +495,7 @@ class SocEnv(gym.Env):
             self.img_context_frame.append(licam_image)
 
     def get_observations(self):
-        mlp_states_un, mlp_states = self._get_vector_observation()
+        mlp_states_un, mlp_states, chunk = self._get_vector_observation()
         if self.state_normalize == False:
             mlp_states = mlp_states_un
 
@@ -458,23 +509,24 @@ class SocEnv(gym.Env):
         if lidar_data.size == 0:
             lidar_data = None
 
-        self._append_observation_context_window(mlp_states, licam_image)
-
         if self.use_context_window:
+            self._append_observation_context_window(mlp_states, licam_image)
             mlp_combined_context = self.get_mlp_combined_context()
             img_combined_context = self.get_img_combined_context()
             return (
                 {"vector": mlp_combined_context, "image": img_combined_context},
                 lidar_data,
                 camera_data,
-                mlp_states,
+                mlp_states_un,
+                chunk
             )
         else:
             return (
-                np.concatenate(mlp_states),
+                {'vector': np.concatenate(mlp_states)},
                 lidar_data,
                 camera_data,
-                mlp_states,
+                mlp_states_un,
+                chunk
             )
 
     def get_mlp_combined_context(self):
@@ -487,6 +539,7 @@ class SocEnv(gym.Env):
         self,
         lidar_data,
         camera_image,
+        orien,
         mlp_obs,
         yolo_model,
         world_min_max,
@@ -498,6 +551,7 @@ class SocEnv(gym.Env):
         return get_new_image(
             lidar_data,
             camera_image,
+            self.orien,
             mlp_obs,
             yolo_model,
             world_min_max,
@@ -505,13 +559,15 @@ class SocEnv(gym.Env):
             image_size,
         )
 
-    def de_normalize_states(self, observation):
-        return [
-            observation[0] * self.world_limits,
-            observation[1],
-            observation[2] * self.world_limits,
-            observation[3] * self.max_episode_length,
-        ]
+    # def de_normalize_states(self, observation):
+    #     return [
+    #         observation[0] * self.world_limits,
+    #         observation[1] * self.world_limits,
+    #         observation[2] * (np.pi),
+    #         observation[3] * (2*np.pi),
+    #         observation[4],
+    #         observation[5] * self.max_episode_length,
+    #     ]
 
     def next_coords(self, actions, position, orientation):
         from omni.isaac.core.utils.rotations import (
@@ -521,15 +577,20 @@ class SocEnv(gym.Env):
 
         l, theta = actions[0] * self.bot_l, actions[1] * self.bot_theta
 
+        self.bot.rl_bot_ori[0] += theta
+        self.bot.rl_bot_ori[0] = self.bot.rl_bot_ori[0] % (2*np.pi)
+
         _, _, current_yaw = quat_to_euler_angles(orientation)
         world_theta = current_yaw + theta
 
-        x1, y1 = l * np.cos(world_theta), l * np.sin(world_theta)
+        wandb.log({"RL_Bot_Ori": self.bot.rl_bot_ori[0], "Omni_Theta": world_theta})
+
+        x1, y1 = l * np.cos(self.bot.rl_bot_ori[0]), l * np.sin(self.bot.rl_bot_ori[0])
         next_pos = np.array([x1, y1, 0.0])
 
-        orien = euler_angles_to_quat(np.array([0.0, 0.0, world_theta]))
+        self.orien = euler_angles_to_quat(np.array([0.0, 0.0, self.bot.rl_bot_ori[0]]))
 
-        return (position + next_pos, orien)
+        return (position + next_pos, self.orien)
 
     def step(self, action):  # action = [l, theta], l in [-0.5, 1] and theta in [-1, 1]
         wandb.log({"Simulation_timesteps": self.sim_context.current_time})
@@ -579,45 +640,44 @@ class SocEnv(gym.Env):
 
         self.ep_steps += 1
 
-        observations, lidar_data, camera_data, mlp_obs = self.get_observations()
-        if self.state_normalize == True:
-            mlp_obs = self.de_normalize_states(mlp_obs)
+        observations, lidar_data, camera_data, mlp_obs, chunk = self.get_observations()
 
         self.info = {}
         self.info["lidar_data"] = lidar_data
         self.info["camera_data"] = camera_data
 
-        reward, to_point_rew, reward_dict, ep_rew_dict = (
+        reward, reward_dict = (
             self.reward_manager.compute_reward(
-                prev_bot_pos[:2], mlp_obs[0], mlp_obs[-2], lidar_data
+                prev_bot_pos=prev_bot_pos[:2], cur_bot_pos=mlp_obs[0], goal_pos=mlp_obs[1], chunk=chunk, lidar_data=lidar_data
             )
         )
-        done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[-1])
+        done, done_reason = self.is_terminated(mlp_obs[0], mlp_obs[1])
         if done:
             if done_reason == "timeout":
-                reward = self.reward_manager.timeout_penalty
+                reward += self.reward_manager.timeout_penalty
                 wandb.log({"timeout": self.reward_manager.timeout_penalty})
-                to_point_rew = 0
             elif done_reason == "boundary_collision":
                 reward += self.reward_manager.boundary_coll_penalty
                 wandb.log(
                     {"boundary_collision": self.reward_manager.boundary_coll_penalty}
                 )
-                to_point_rew = 0
             elif done_reason == "goal_reached":
+                reward += self.reward_manager.goal_reward
+                wandb.log({"goal_reached": self.reward_manager.goal_reward})
                 print("Goal Reached!!!!")
+
+        wandb.log(reward_dict)
+        _, ep_reward_dict = self.reward_manager.update_ep_rewards(reward_dict)
+        wandb.log(ep_reward_dict)
 
         self.logger.info(f"Step: action={action}, reward={reward}, done={done}")
         wandb.log(
             {
                 "L": action[0],
                 "Theta": action[1],
-                "step_reward": reward,
-                "to_point_reward": to_point_rew,
                 "step_total_timesteps": self.total_timesteps,
             }
         )
-        wandb.log(self.reward_manager.ep_reward_dict)
 
         return observations, reward, done, self.info
 
@@ -628,10 +688,11 @@ class SocEnv(gym.Env):
             return True, "timeout"
         if self.reward_manager.check_goal_reached(cur_bot_pos, goal_pos):
             self.logger.info("Goal reached")
-            wandb.log({"boundary_collision": 0})
+            wandb.log({"goal_reached": 0})
             return True, "goal_reached"
         if self.reward_manager.check_boundary(cur_bot_pos):
             self.logger.info("Boundary collision detected")
+            wandb.log({"boundary_collision": 0})
             return True, "boundary_collision"
         return False, None
 
@@ -983,7 +1044,7 @@ def create_model(
 ):
     if algo.lower() == "ppo":
         return PPO(
-            PPOMultiPolicy if use_feature_extractor else PPO_MlpPolicy,
+            PPOMultiPolicy,
             my_env,
             policy_kwargs=policy_kwargs,
             verbose=1,
@@ -992,7 +1053,7 @@ def create_model(
         )
     elif algo.lower() == "sac":
         return SAC(
-            SACMultiPolicy if use_feature_extractor else SAC_MlpPolicy,
+            SACMultiPolicy,
             my_env,
             policy_kwargs=policy_kwargs,
             verbose=1,
@@ -1197,9 +1258,9 @@ def main():
                 total_timesteps=500000000,
                 progress_bar=True,
                 callback=[
-                    checkpoint_callback,
-                    best_model_callback,
-                    eval_callback,
+                    # checkpoint_callback,
+                    # best_model_callback,
+                    # eval_callback,
                     # wandb_callback,
                     gradient_accumulation_callback,
                 ],

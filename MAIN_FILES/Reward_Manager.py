@@ -20,7 +20,7 @@ class SocNavManager:
             'ep_dist_to_goal_rew': 0,
             'ep_smooth_crash_rew': 0,
             'ep_close_coll_rew': 0,
-            'ep_goal_reached_rew': 0,
+            # 'ep_goal_reached_rew': 0,
             'ep_current_rew': 0
         }
 
@@ -134,7 +134,6 @@ class SocNavManager:
             'ep_dist_to_goal_rew': 0,
             'ep_smooth_crash_rew': 0,
             'ep_close_coll_rew': 0,
-            'ep_goal_reached_rew': 0,
             'ep_current_rew': 0
         }
         self.episode_length = 0
@@ -146,40 +145,38 @@ class SocNavManager:
                        'dist_to_goal_rew': 0, 
                        'smooth_crash_rew': 0, 
                        'close_coll_rew': 0, 
-                       'goal_reached_rew': 0, 
                        'current_rew': 0}
         self.episode_length += 1
 
-        if self.check_goal_reached(cur_bot_pos, goal_pos):
-            reward_dict['goal_reached_rew'] = self.goal_reward
-            self.current_rew = reward_dict['goal_reached_rew']
-            self.logger.info(f"Goal reached! Reward: {self.goal_reward}")
+        # if self.check_goal_reached(cur_bot_pos, goal_pos):
+        #     reward_dict['goal_reached_rew'] = self.goal_reward
+        #     self.current_rew = reward_dict['goal_reached_rew']
+        #     self.logger.info(f"Goal reached! Reward: {self.goal_reward}")
+        # else:
+        direction_reward = self.reward_for_direction(cur_bot_pos, prev_bot_pos, goal_pos)
+        scaled_direction_reward = self.scale_direction_reward(direction_reward, cur_bot_pos, goal_pos)
+        reward_dict['cosine_sim_rew'] = scaled_direction_reward
+
+        distance_reward = self.reward_for_distance(cur_bot_pos, prev_bot_pos, goal_pos)
+        scaled_distance_reward = self.scale_distance_reward(distance_reward, cur_bot_pos, goal_pos)
+        reward_dict['dist_to_goal_rew'] = scaled_distance_reward
+
+        smooth_crash_penalty = self.smooth_crash_penalty(cur_bot_pos)
+        reward_dict['smooth_crash_rew'] = smooth_crash_penalty
+
+        if "social" in self.components:
+            reward_dict['close_coll_rew'] = self.close_collision_reward(lidar_data)
         else:
-            direction_reward = self.reward_for_direction(cur_bot_pos, prev_bot_pos, goal_pos)
-            scaled_direction_reward = self.scale_direction_reward(direction_reward, cur_bot_pos, goal_pos)
-            reward_dict['cosine_sim_rew'] = scaled_direction_reward
+            reward_dict['close_coll_rew'] = 0
 
-            distance_reward = self.reward_for_distance(cur_bot_pos, prev_bot_pos, goal_pos)
-            scaled_distance_reward = self.scale_distance_reward(distance_reward, cur_bot_pos, goal_pos)
-            reward_dict['dist_to_goal_rew'] = scaled_distance_reward
-
-            smooth_crash_penalty = self.smooth_crash_penalty(cur_bot_pos)
-            reward_dict['smooth_crash_rew'] = smooth_crash_penalty
-
-            if "social" in self.components:
-                reward_dict['close_coll_rew'] = self.close_collision_reward(lidar_data)
-            else:
-                reward_dict['close_coll_rew'] = 0
-
-            self.current_rew = scaled_direction_reward + scaled_distance_reward + smooth_crash_penalty + reward_dict['close_coll_rew'] + self.live_reward 
+        self.current_rew = reward_dict['cosine_sim_rew'] + reward_dict['dist_to_goal_rew'] + reward_dict['smooth_crash_rew'] + reward_dict['close_coll_rew'] + self.live_reward 
 
         reward_dict['current_rew'] = self.current_rew
 
         self.logger.info(f"Reward computed: {reward_dict}")
-        wandb.log(reward_dict)
 
-        self.to_point_rew, self.ep_reward_dict = self._update_reward(reward_dict)
-        return self.current_rew, self.to_point_rew, reward_dict, self.ep_reward_dict
+        # self.to_point_rew, self.ep_reward_dict = self._update_ep_reward(reward_dict)
+        return self.current_rew, reward_dict
 
 
     def hard_crash_penalty(self):
@@ -237,16 +234,14 @@ class SocNavManager:
         x_min, x_max, y_min, y_max = self.boundary_limits
         return not (x_min <= x <= x_max and y_min <= y <= y_max)
     
-    def _update_reward(self, reward_dict):
+    def update_rewards(self, reward_dict):
         self.ep_reward_dict['ep_cosine_sim_rew'] += reward_dict['cosine_sim_rew']
         self.ep_reward_dict['ep_dist_to_goal_rew'] += reward_dict['dist_to_goal_rew']
         self.ep_reward_dict['ep_smooth_crash_rew'] += reward_dict['smooth_crash_rew']
         self.ep_reward_dict['ep_close_coll_rew'] += reward_dict['close_coll_rew']
-        self.ep_reward_dict['ep_goal_reached_rew'] += reward_dict['goal_reached_rew']
         self.ep_reward_dict['ep_current_rew'] += reward_dict['current_rew']
 
         self.logger.info(f"Updated episode rewards: {self.ep_reward_dict}")
-        wandb.log(self.ep_reward_dict)
         return self.ep_reward_dict['ep_current_rew'], self.ep_reward_dict
     
     # PATH CHECKS

@@ -38,7 +38,7 @@ class CustomArguments:
         individual_step_size=2.0,
         interpolation=100,
     ):
-        self.worlds_file = "./standalone_examples/api/omni.isaac.kit/MAIN_FILES/Traj_Gen/worlds.json"
+        self.worlds_file = "/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/MAIN_FILES/Traj_Gen/worlds.json"
         self.world_number = world_number
         self.min_people = min_people
         self.max_people = max_people

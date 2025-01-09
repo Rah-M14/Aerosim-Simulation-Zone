@@ -10,16 +10,16 @@ class SimulationConfig:
     max_episode_length: int = 1000
     skip_frame: int = 1
     gpu_config: Dict = None
-    headless: bool = True
+    headless: bool = False
     simulation_app_config: Dict = None
 
     def __post_init__(self):
         if self.simulation_app_config is None:
             self.simulation_app_config = {
+                "headless": self.headless,
                 "width": 1280,
                 "height": 720,
                 "sync_loads": True,
-                "headless": self.headless,
                 "active_gpu": 0,
                 "physics_gpu": 0,
                 "multi_gpu": False,
@@ -51,14 +51,24 @@ class RobotConfig:
             self.wheel_base = 0.262
 
 @dataclass
+class RRTStarConfig:
+    """RRTStar configuration parameters"""
+    max_iter: int = 500
+    step_size: float = 0.66
+    neighbor_radius: float = 1.0
+
+@dataclass
 class ObservationConfig:
     """Observation space configuration parameters"""
+    use_path: bool = True
+    chunk_size: int = 12
+    base_dim: int = 7
     mlp_context_length: int = 32
     img_context_length: int = 16
     state_normalize: bool = True
     image_size: int = 64
     channels: int = 3
-    vector_dim: int = 9
+    vector_dim: int = (base_dim + 2*chunk_size) if use_path else base_dim
 
 @dataclass
 class RewardConfig:
@@ -81,6 +91,12 @@ class RewardConfig:
     close_goal_dist_threshold: float = 0.5
     goal_reward: float = 1000.0
     live_reward: float = -2.0
+
+    # RRT* PATH REWARD PARAMS
+    path_corridor_width: float = 1.0  # Acceptable deviation width
+    max_path_deviation: float = 1.5   # Maximum deviation before heavy penalties
+    path_following_factor: float = 5
+    deviation_penalty_factor: float = -5
     
     # NEW SCALING PARAMETERS
     max_distance: float = 10.0  # Maximum possible distance in the environment
@@ -123,7 +139,7 @@ class TrainingConfig:
                 "ent_coef": "auto_0.1",
                 "train_freq": (1, "episode"),
                 "gradient_steps": -1,
-                "learning_starts": 1,
+                "learning_starts": 5000,
                 "use_sde": False,
                 "sde_sample_freq": -1,
                 "use_sde_at_warmup": False,
