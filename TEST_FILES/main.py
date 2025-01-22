@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import wandb
 import argparse
+import torch
 
 from stable_baselines3 import SAC, PPO, TD3
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
@@ -36,22 +37,40 @@ class ProgressBarCallback(BaseCallback):
 class WandbCallback(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
+        self.global_step = 0
 
     def _on_step(self):
+        self.global_step += 1
         # Log training metrics and Learning Curve
         if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
-            wandb.log({
-                "train/episode_reward": safe_mean([ep_info["r"] for ep_info in self.model.ep_info_buffer]),
-                "train/episode_length": safe_mean([ep_info["l"] for ep_info in self.model.ep_info_buffer]),
-            })
+            wandb.log({"train/global_step": self.global_step})
+            wandb.log({"train/episode_reward": safe_mean([ep_info["r"] for ep_info in self.model.ep_info_buffer]), "train/global_step": self.global_step})
+            wandb.log({"train/episode_length": safe_mean([ep_info["l"] for ep_info in self.model.ep_info_buffer]), "train/global_step": self.global_step})
+        return True
+    
+class CkptAutoRemovalCallback(BaseCallback):
+    def __init__(self, model_dir, algo, keep_num=3, frequency=100000):
+        super().__init__()
+        self.model_dir = model_dir
+        self.algo = algo
+        self.keep_num = keep_num
+        self.frequency = frequency
+
+    def _on_step(self):
+        ckpts = os.listdir(self.model_dir)
+        ckpts.sort(key=lambda x: os.path.getmtime(os.path.join(self.model_dir, x)))
+        for ckpt in ckpts[:-self.keep_num]:
+            os.remove(os.path.join(self.model_dir, ckpt))
         return True
 
-def make_env(algo):
+def make_env(algo, enable_reward_monitor: bool = False, enable_wandb: bool = False):
     env = PathFollowingEnv(
         image_path="standalone_examples/api/omni.isaac.kit/TEST_FILES/New_WR_World.png",
-        algo=algo,
+        algo_run=algo,
         max_episode_steps=obs_config.max_episode_steps,
-        chunk_size=obs_config.chunk_size
+        chunk_size=obs_config.chunk_size,
+        enable_reward_monitor=enable_reward_monitor,
+        enable_wandb=enable_wandb
     )
     return env
 
@@ -79,38 +98,42 @@ def main(args):
     
     base_dir = "/home/rahm/SIMPLE_LOGS"
     run_id = get_next_run_folder(os.path.join(base_dir, "logs", algorithm))
+    name = f"{algorithm}_{run_id}"
     
-    run = wandb.init(
-        project="path-following-rl",
-        name=f"{algorithm}_{run_id}",
-        config={
-            "algorithm": algorithm,
-            "learning_rate": 3e-4,
-            "batch_size": 256,
-            "buffer_size": 1000000,
-            "gamma": 0.99,
-            "tau": 0.005,
-            "train_freq": 1,
-            "gradient_steps": 1,
-            "learning_starts": 10000,
-            "policy_architecture": [256, 512, 512, 256],
-            "value_architecture": [256, 512, 512, 256],
-            "total_timesteps": 10000000,
-        }
-    )
+    if args.wandb_log:
+        run = wandb.init(
+            project="path-following-rl",
+            name=name,
+            config={
+                "algorithm": algorithm,
+                "learning_rate": 3e-4,
+                "batch_size": 256,
+                "buffer_size": 1000000,
+                "gamma": 0.99,
+                "tau": 0.005,
+                "train_freq": 1,
+                "gradient_steps": 1,
+                "learning_starts": 10000,
+                "policy_architecture": [256, 512, 512, 256],
+                "value_architecture": [256, 512, 512, 256],
+                "total_timesteps": 10000000,
+            }
+        )
+    # else:
+        # wandb.init(project="path-following-rl", name=name)
     
     log_dir = os.path.join(base_dir, "logs", algorithm, run_id)
     model_dir = os.path.join(base_dir, "models", algorithm, run_id)
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    env = make_env(algorithm)
+    env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log)
     env = Monitor(env, log_dir)
     env = DummyVecEnv([lambda: env])
     env = VecNormalize(env, norm_obs=True, norm_reward=True)
 
     # Create evaluation environment
-    eval_env = make_env(algorithm)
+    eval_env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log)
     eval_env = Monitor(eval_env, log_dir)
     eval_env = DummyVecEnv([lambda: eval_env])
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True)
@@ -206,7 +229,12 @@ def main(args):
                 verbose=1
             )
 
-    total_timesteps = 10000000
+    if args.policy:
+        pretrained_policy = torch.load(args.policy)
+        pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
+        model.policy.load_state_dict(pretrained_policy['model_state_dict'])
+
+    total_timesteps = 1000000000
 
 
     callbacks = [
@@ -223,6 +251,7 @@ def main(args):
             deterministic=True,
             render=False
         ),
+        CkptAutoRemovalCallback(model_dir, algorithm, keep_num=3, frequency=50000),
         WandbCallback(),
         ProgressBarCallback(total_timesteps)
     ]
@@ -251,23 +280,23 @@ def main(args):
     finally:
         wandb.finish()
 
-def evaluate_model(algo, num_episodes=10):
+def evaluate_model(algo, model_path, num_episodes=10):
     wandb.init(
-        project="path-following-rl",
+        project="path-following-eval",
         name="evaluation",
         config={"num_episodes": num_episodes}
     )
     
-    env = make_env(algo)
+    env = make_env(algo, enable_reward_monitor=True, enable_wandb=args.wandb_log)
     env = DummyVecEnv([lambda: env])
-    env = VecNormalize.load(f"models/vec_normalize.pkl", env)
+    # env = VecNormalize.load(f"models/vec_normalize.pkl", env)
 
     if algo == "SAC":   
-        model = SAC.load(f"models/final_model_{algo}")
+        model = SAC.load(model_path)
     elif algo == "PPO":
-        model = PPO.load(f"models/final_model_{algo}")
+        model = PPO.load(model_path)
     elif algo == "TD3":
-        model = TD3.load(f"models/final_model_{algo}")
+        model = TD3.load(model_path)
 
     rewards = []
     
@@ -315,7 +344,9 @@ def evaluate_model(algo, num_episodes=10):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--evaluate", action="store_true", help="Evaluate the trained model")
-    parser.add_argument("--resume", type=str, default="latest", choices=["latest", "best"], help="Resume the checkpoint")
+    parser.add_argument("--wandb_log", action="store_true", help="Enable WandB logging")
+    parser.add_argument("--policy", type=str, help="Pretrained base policy")
+    parser.add_argument("--resume", type=str, default=None, choices=["latest", "best"], help="Resume the checkpoint")
     parser.add_argument("--algo", type=str, default="sac", choices=["ppo", "sac", "td3"], help="Algorithm to use")
     parser.add_argument("--ckpt_path", type=str, default=None, help="Path to the checkpoint")
     args = parser.parse_args()

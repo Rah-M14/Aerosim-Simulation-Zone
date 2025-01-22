@@ -60,7 +60,7 @@ class RRTStarConfig:
 @dataclass
 class ObservationConfig:
     """Observation space configuration parameters"""
-    max_episode_steps: int = 500
+    max_episode_steps: int = 200
     use_path: bool = True
     chunk_size: int = 12
     base_dim: int = 11

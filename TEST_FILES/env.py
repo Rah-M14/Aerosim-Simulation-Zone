@@ -4,33 +4,36 @@ import wandb
 from gymnasium import spaces
 from typing import Optional, Tuple, Dict, Any
 import matplotlib
-matplotlib.use('Agg')  # Use Agg backend for off-screen rendering
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Arrow, Polygon
-import matplotlib.colors as mcolors
-import matplotlib.transforms as mtransforms
+# from matplotlib.patches import Circle, Arrow, Polygon
+# import matplotlib.colors as mcolors
+# import matplotlib.transforms as mtransforms
 import os
 import cv2
 
+from LiDAR import *
+
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
-from Reward_Manager import RewardManager
 from configs import ObservationConfig
+from new_reward_manager import RewardManager
+from reward_monitor import RewardMonitor
 
 obs_config = ObservationConfig()
 
 class PathFollowingEnv(gym.Env):    
-    def __init__(self, image_path: str, algo: str, max_episode_steps: int = 1000, chunk_size: int = obs_config.chunk_size):
+    def __init__(self, image_path: str, algo_run: str, max_episode_steps: int = 1000, chunk_size: int = obs_config.chunk_size, headless: bool = False, enable_reward_monitor: bool = False, enable_wandb: bool = False):
         super().__init__()
         
-        self.path_manager = PathManager(image_path, chunk_size=chunk_size)
-        self.reward_manager = RewardManager()
+        self.image_path = image_path
         self.chunk_size = chunk_size
-        self.algo = algo
-
+        self.name = algo_run
+        self.headless = headless
 
         self.start = np.zeros(2)
         self.goal_pos = np.zeros(2)
+        
         self.current_chunk = None
         self.current_pos = None
         self.prev_pos = None
@@ -41,20 +44,26 @@ class PathFollowingEnv(gym.Env):
         self.dist_to_goal = 0.0
         self.dist_to_next = 0.0
         
-        self.episode_reward = 0
+        self.episode_reward = 0.0
         self.episode_length = 0
-        self.episode_num = 0
+        self.episode_num = 1
         
         self.agent_theta = 0.0
-
+        self.world_max = np.array([8, 6])
+        self.world_limits = np.array([[-8, 8], [-6, 6]])
+        self.env_world_limits = np.array([[-10, 10], [-8, 8]])
+        self.world_diag = np.linalg.norm(self.world_max)
 
         # Movement parameters
         self.max_step_size = 1  # Maximum distance the agent can move in one step
-        self.max_theta = np.pi / 9  # Maximum angle the agent can move in one step
-        # Actions: [L, theta] - continuous values between -1 and 1
+        self.max_theta = np.pi  # Maximum angle the agent can move in one step
+
+        # LiDAR Parameters
+        self.lidar_specs = [1, 360, 720, 200] # [resolution, FOV, #Rays, distance]
+
         self.action_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
+            low=np.array([0.0, -1.0]),
+            high=np.array([1.0, 1.0]),
             shape=(2,),
             dtype=np.float32
         )
@@ -65,58 +74,96 @@ class PathFollowingEnv(gym.Env):
         #   next_waypoints (chunk_size * 2),        # Next waypoints in path (chunk_size * 2)
         #   distance_to_goal,                       # Scalar distance to final goal (1)
         #   distance_to_next_waypoint               # Scalar distance to next waypoint (1)
+        #   Timestep t                              # Timestep (1)
         # ]
-        obs_size = self.start.shape[-1] + self.goal_pos.shape[-1] + (chunk_size * 2) + 2
-        print(f"obs_size: {obs_size}")
+
+        obs_size = self.start.shape[-1] + self.goal_pos.shape[-1] + (chunk_size * 2) + 3
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
             shape=(obs_size,),
             dtype=np.float32
-        )        
+        )
+
+        self.path_manager = PathManager(image_path, chunk_size=chunk_size)
+        self.reward_manager = RewardManager(self.agent_theta, monitor=None)
         
-        # Create output directory for frames if it doesn't exist
-        self.output_dir = "render_frames"
-        os.makedirs(self.output_dir, exist_ok=True)
+        # Initialize reward monitor if enabled
+        if enable_reward_monitor:
+            self.reward_manager.monitor = RewardMonitor(max_steps=max_episode_steps)
         
-        # Initialize figure for off-screen rendering
-        plt.ioff()  # Turn off interactive mode
-        self.fig, self.ax = plt.subplots(figsize=(10, 8), facecolor='black')
-        self.ax.set_facecolor('black')
+        if enable_wandb:
+            self.wandb_enabled = True
+            wandb.define_metric("RL_step")
+            wandb.define_metric("episode_num")
+            wandb.define_metric("episode_num", step_metric="RL_step")
+
+            wandb.define_metric("Learning Curve", step_metric="episode_num")
+            wandb.define_metric("episode_length", step_metric="episode_num")
+
+            wandb.define_metric("Action_L", step_metric="RL_step")
+            wandb.define_metric("Action_Theta", step_metric="RL_step")
+            # wandb.define_metric("Total Reward (Step)", step_metric="RL_step")
+            wandb.define_metric("Goal Reached", step_metric="RL_step")
+            wandb.define_metric("Timeout", step_metric="RL_step")
+            wandb.define_metric("Boundary", step_metric="RL_step")
+            wandb.define_metric("success_reward", step_metric="RL_step")
+            wandb.define_metric("timeout_penalty", step_metric="RL_step")
+            wandb.define_metric("boundary_penalty", step_metric="RL_step")
+            wandb.define_metric("total_reward", step_metric="RL_step")
+            wandb.define_metric("goal_potential", step_metric="RL_step")
+            wandb.define_metric("path_potential", step_metric="RL_step")
+            wandb.define_metric("progress", step_metric="RL_step")
+            wandb.define_metric("path_following", step_metric="RL_step")
+            wandb.define_metric("heading", step_metric="RL_step")
+            wandb.define_metric("oscillation_penalty", step_metric="RL_step")
+        else:
+            self.wandb_enabled = False
+
+        if not self.headless:
+            self.output_dir = "render_frames"
+            os.makedirs(self.output_dir, exist_ok=True)
         
-        # Create named window for OpenCV
-        cv2.namedWindow('Path Following Environment - ' + self.algo, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Path Following Environment - ' + self.algo, 800, 600)
+            # Initialize figure for off-screen rendering
+            plt.ioff()  # Turn off interactive mode
+            self.fig, self.ax = plt.subplots(figsize=(10, 8), facecolor='black')
+            self.ax.set_facecolor('black')
+            
+            # Create named window for OpenCV
+            cv2.namedWindow('Path Following Environment - ' + self.name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow('Path Following Environment - ' + self.name, 800, 600)
         
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, Dict]:
-        """Reset the environment."""
         super().reset(seed=seed)
         
-        # Clear the figure but don't close it
-        self.ax.clear()
+        if not self.headless:
+            self.ax.clear()
         
+        # Reset reward monitor if it exists
+        if hasattr(self.reward_manager, 'monitor'):
+            self.reward_manager.monitor.reset()
+
+        if self.wandb_enabled:
+            wandb.log({"episode_num": self.episode_num})
+            wandb.log({"episode_length": self.episode_length})
+            wandb.log({"Learning Curve": self.episode_reward})
+
         # Reset internal counters
         self.current_step = 0
         self.episode_reward = 0
-        self.episode_length = 0
         self.episode_num += 1
 
-        self.coll_term = 1
-        self.timeout_tem = -1
-
-        # Generate new start and goal positions
         self.current_pos = self.gen_bot_pos()
         self.prev_pos = self.current_pos
-        self.goal_pos = self.gen_bot_pos()
+        # self.goal_pos = self.gen_bot_pos()
+        self.goal_pos = self.current_pos + np.random.uniform(-3.0, 3.0, size=2)
 
-        # Initialize agent_theta if it hasn't been set
-        self.agent_theta = 0.0
-        
         # Reset path manager and plan new path
         self.path_manager.reset()
         self.path_manager.plan_new_path(self.current_pos, self.goal_pos)
-
         self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
+
+        self.reward_manager.reset()
         
         return self._get_observation(), {}
     
@@ -131,59 +178,80 @@ class PathFollowingEnv(gym.Env):
         self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
         
         observation = self._get_observation()
-        reward = self.reward_manager.compute_reward(
+        
+        if self.wandb_enabled:
+            wandb.log({"RL_step": self.global_step})
+            wandb.log({"Action_L": action[0]})
+            wandb.log({"Action_Theta": action[1]})
+        
+        reward, reward_components = self.reward_manager.compute_reward(
             current_pos=self.current_pos,
             prev_pos=self.prev_pos,
             goal_pos=self.goal_pos,
             chunk=self.current_chunk,
-            action=action
+            world_theta=self.agent_theta
         )
         
         self.episode_reward += reward
         
         done = False
         truncated = False
+        
+        # Update info dict with reward components
         info = {
             'episode_reward': self.episode_reward,
             'episode_length': self.episode_length,
-            'distance_to_goal': observation[-2],
-            'distance_to_next': observation[-1],
+            'distance_to_goal': observation[-3],
+            'distance_to_next': observation[-2],
             'action_linear': action[0],
-            'action_angular': action[1]
+            'action_angular': action[1],
+            'reward_components': reward_components,
+            'success': False,
+            'timeout': False,
+            'boundary': False,
+            'total_reward': reward
         }
         
         if info['distance_to_goal'] < 0.1:
             done = True
-            reward += self.reward_manager.SUCCESS_REWARD
+            success_reward = self.reward_manager.GOAL_REACHED_REWARD
+            reward += success_reward
             info['success'] = True
+            reward_components['success_reward'] = success_reward
+            wandb.log({"Goal Reached": 1}) if self.wandb_enabled else None
+        else:
+            wandb.log({"Goal Reached": 0}) if self.wandb_enabled else None
+            reward_components['success_reward'] = 0.0
         
         if self.current_step >= self.max_episode_steps:
             truncated = True
-            wandb.log({"Ep_Termination": self.timeout_tem, 'episode_num' : self.episode_num})
-            reward += self.reward_manager.TIMEOUT_PENALTY
+            timeout_penalty = self.reward_manager.TIMEOUT_PENALTY
+            reward += timeout_penalty
             info['timeout'] = True
-        elif self.reward_manager.out_of_boundary_penalty(self.current_pos) < 0.0:
-            truncated = True
-            wandb.log({"Ep_Termination": self.coll_term, 'episode_num' : self.episode_num})
-            reward += self.reward_manager.BOUNDARY_PENALTY
-            info['boundary'] = True
-        wandb.log({"Ep_Termination": 0, 'episode_num' : self.episode_num})
+            reward_components['timeout_penalty'] = timeout_penalty
+            wandb.log({"Timeout": 1}) if self.wandb_enabled else None
+        else:
+            wandb.log({"Timeout": 0}) if self.wandb_enabled else None
+            reward_components['timeout_penalty'] = 0.0
 
-        # Log episode data when done
-        if done or truncated:
-            wandb.log({'episode': self.episode_num, 'episode_num' : self.episode_num})
-            wandb.log({'episode_reward': self.episode_reward, 'episode_num' : self.episode_num})
-            wandb.log({'episode_length': self.episode_length, 'episode_num' : self.episode_num})
-        
-        # Log step data
-        wandb.log({'step_reward': reward, 'global_step' : self.global_step})
-        wandb.log({'distance_to_goal': info['distance_to_goal'], 'global_step' : self.global_step})
-        wandb.log({'distance_to_next': info['distance_to_next'], 'global_step' : self.global_step})
-        wandb.log({'action_linear': info['action_linear'], 'global_step' : self.global_step})
-        wandb.log({'action_angular': info['action_angular'], 'global_step' : self.global_step})
-        wandb.log({'global_step': self.global_step})
-        
-        self.render()
+        if self.reward_manager.out_of_boundary_penalty(self.current_pos) < 0.0:
+            truncated = True
+            boundary_penalty = self.reward_manager.BOUNDARY_PENALTY
+            reward += boundary_penalty
+            info['boundary'] = True
+            reward_components['boundary_penalty'] = boundary_penalty
+            wandb.log({"Boundary": 1}) if self.wandb_enabled else None
+        else:
+            wandb.log({"Boundary": 0}) if self.wandb_enabled else None
+            reward_components['boundary_penalty'] = 0.0
+
+        reward_components['total_reward'] = reward
+
+        if self.wandb_enabled:
+            wandb.log(reward_components)
+
+        if not self.headless:
+            self.render()
         
         return observation, reward, done, truncated, info
     
@@ -192,12 +260,7 @@ class PathFollowingEnv(gym.Env):
         theta = action[1] * self.max_theta
         
         self.agent_theta += theta
-
-        if self.agent_theta > 0 and self.agent_theta < np.pi:
-            self.agent_theta = self.agent_theta
-        else:
-            self.agent_theta = -(np.pi - self.agent_theta % (np.pi))
-        
+        self.agent_theta = ((self.agent_theta + np.pi) % (2*np.pi)) - np.pi
         self.prev_theta = theta
 
         return np.array([self.current_pos[0] + (L*np.cos(self.agent_theta)), self.current_pos[1] + (L*np.sin(self.agent_theta))])
@@ -206,32 +269,29 @@ class PathFollowingEnv(gym.Env):
         dist_to_goal = np.linalg.norm(self.current_pos - self.goal_pos)
         dist_to_next = np.linalg.norm(self.current_pos - self.current_chunk[0])
         
-        # Ensure chunk is the correct size
         if self.current_chunk.shape[0] != self.chunk_size:
-            # Create a properly sized chunk array
             fixed_chunk = np.zeros((self.chunk_size, 2))
             
-            # Fill with actual waypoints as much as possible
             actual_points = min(self.current_chunk.shape[0], self.chunk_size)
             fixed_chunk[:actual_points] = self.current_chunk[:actual_points]
             
-            # If we have fewer points than chunk_size, fill the rest with the last valid point
             if actual_points < self.chunk_size:
                 fixed_chunk[actual_points:] = self.current_chunk[-1]
                 
             self.current_chunk = fixed_chunk
         
-        flat_chunk = self.current_chunk.flatten()
+        flat_chunk = (self.current_chunk / self.world_max).flatten()
         
         obs = np.concatenate([
-            self.current_pos,           # Current position (2)
-            self.goal_pos,              # Goal position (2)
-            flat_chunk,                 # Waypoints (chunk_size * 2)
-            np.array([dist_to_goal]),   # Distance to goal (1)
-            np.array([dist_to_next])    # Distance to next waypoint (1)
+            self.current_pos / self.world_max,               # Current position (2)
+            self.goal_pos / self.world_max,                  # Goal position (2)
+            flat_chunk,                   # Waypoints (chunk_size * 2)
+            np.array([dist_to_goal / self.world_diag]),       # Distance to goal (1)
+            np.array([dist_to_next / self.world_diag]),       # Distance to next waypoint (1)
+            np.array([self.current_step / self.max_episode_steps])   # Timestep (1)
         ]).astype(np.float32)
         
-        expected_size = 2 + 2 + (self.chunk_size * 2) + 2
+        expected_size = 2 + 2 + (self.chunk_size * 2) + 3
         assert obs.shape[0] == expected_size, f"Observation shape mismatch. Expected {expected_size}, got {obs.shape[0]}"
         
         return obs
@@ -253,6 +313,32 @@ class PathFollowingEnv(gym.Env):
             for y in range(-6, 7):
                 y_img = int((6 - y) * 50)
                 cv2.line(img, (0, y_img), (800, y_img), (50, 50, 50), 1)
+            
+            # Get LiDAR points using actual world limits for simulation
+            # points = lidar_simulation_from_image(
+            #     image_path=self.image_path, 
+            #     left_corner=(-10, 7),  # Fixed world limits for LiDAR simulation
+            #     right_corner=(10, -7), 
+            #     start=self.current_pos, 
+            #     end=self.goal_pos, 
+            #     resolution=self.lidar_specs[0], 
+            #     fov=self.lidar_specs[1], 
+            #     num_rays=self.lidar_specs[2], 
+            #     max_distance=self.lidar_specs[3]
+            # )
+            
+            # # Draw LiDAR points
+            # for point in points:
+            #     world_x = point[0]/self.lidar_specs[0] + self.current_pos[0]
+            #     world_y = point[1]/self.lidar_specs[0] + self.current_pos[1]
+            #     img_x, img_y = world_to_img(world_x, world_y)
+            #     cv2.circle(img, (img_x, img_y), 2, (0, 0, 255), -1)  # Red dots for LiDAR points
+                
+                # # Only draw points within the visible area
+                # if -8 <= world_x <= 8 and -6 <= world_y <= 6:
+                #     img_x, img_y = world_to_img(world_x, world_y)
+                #     if 0 <= img_x < 800 and 0 <= img_y < 600:  # Check if point is within image bounds
+                #         cv2.circle(img, (img_x, img_y), 2, (0, 0, 255), -1)  # Red dots for LiDAR points
             
             # Draw path
             if self.path_manager.get_full_path() is not None:
@@ -313,8 +399,7 @@ class PathFollowingEnv(gym.Env):
             # Draw goal
             goal_pos = world_to_img(self.goal_pos[0], self.goal_pos[1])
             cv2.circle(img, goal_pos, 15, (0, 255, 0), -1)
-            
-            # Add text information
+
             info_text = [
                 f"Episode: {self.episode_num}",
                 f"Step: {self.current_step}",
@@ -328,26 +413,50 @@ class PathFollowingEnv(gym.Env):
                 cv2.putText(img, text, (10, 30 + i * 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
             
+            if hasattr(self.reward_manager, 'monitor'):
+                reward_info = [
+                    f"Episode Reward: {self.episode_reward:.2f}",
+                    f"Current Reward: {self.reward_manager.monitor.histories['total_reward'][-1]:.2f}" if self.reward_manager.monitor.histories['total_reward'] else "N/A",
+                    f"Goal Potential: {self.reward_manager.monitor.histories['goal_potential'][-1]:.2f}" if self.reward_manager.monitor.histories['goal_potential'] else "N/A",
+                    f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1]:.2f}" if self.reward_manager.monitor.histories['path_potential'] else "N/A",
+                    f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1]:.2f}" if self.reward_manager.monitor.histories['path_following'] else "N/A",
+                    f"Progress: {self.reward_manager.monitor.histories['progress'][-1]:.2f}" if self.reward_manager.monitor.histories['progress'] else "N/A",
+                    f"Heading: {self.reward_manager.monitor.histories['heading'][-1]:.2f}" if self.reward_manager.monitor.histories['heading'] else "N/A",
+                    f"Oscillation Penalty: {self.reward_manager.monitor.histories['oscillation_penalty'][-1]:.2f}" if self.reward_manager.monitor.histories['oscillation_penalty'] else "N/A"
+                ]
+                
+                for i, text in enumerate(reward_info):
+                    cv2.putText(img, text, (500, 30 + i * 30),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 1)
+            
             # Show the image
-            cv2.imshow(f'Path Following Environment - {self.algo}', img)
+            cv2.imshow(f'Path Following Environment - {self.name}', img)
+            # cv2.waitKey(1500)
             cv2.waitKey(1)
             
         except Exception as e:
             print(f"Render error: {e}")
             
     def close(self):
-        """Close all windows safely."""
-        try:
-            plt.close(self.fig)
-            plt.close('all')
-            cv2.destroyAllWindows()
-            cv2.waitKey(1)  # This helps ensure windows are properly closed
-        except Exception as e:
-            print(f"Close error: {e}")
+        if not self.headless:
+            try:
+                plt.close(self.fig)
+                plt.close('all')
+                cv2.destroyAllWindows()
+                cv2.waitKey(1)
+                
+                # Close reward monitor if it exists
+                if hasattr(self.reward_manager, 'monitor'):
+                    plt.close(self.reward_manager.monitor.fig)
+            except Exception as e:
+                print(f"Close error: {e}")
+        else:
+            pass
             
     def __del__(self):
         """Destructor to ensure proper cleanup."""
-        self.close()
+        if not self.headless:
+            self.close()
                 
     def gen_bot_pos(self):
         new_pos = np.array(
@@ -384,4 +493,6 @@ class PathFollowingEnv(gym.Env):
                 )
             ]
         )
+
+        # return np.array([0.0, 0.0])
         return new_pos

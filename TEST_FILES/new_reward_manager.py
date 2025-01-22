@@ -1,0 +1,210 @@
+import numpy as np
+from typing import Dict, Any
+
+class RewardManager:
+    def __init__(self, world_theta: float, monitor: Any = None):
+
+        # World Setup
+        self.world_theta = world_theta
+        self.world_limits = np.array([[-8, 8], [-6, 6]])
+        self.monitor = monitor
+
+
+        # Core Rews
+        self.GOAL_REACHED_REWARD = 5000.0
+        self.BOUNDARY_PENALTY = -1000.0
+        self.TIMEOUT_PENALTY = -1000.0
+        self.LIVE_REWARD = -1.0
+        
+        # Potential Components
+        self.GAMMA = 0.99
+        self.ALPHA_GOAL = 0.7
+        self.ALPHA_PATH = 0.3
+        
+        # Progress Rews
+        self.PROGRESS_BASE = 2.0
+        self.PATH_FOLLOW_BASE = 1.0
+        self.HEADING_BASE = 10.0
+        
+        # Penalties
+        self.DEVIATION_PENALTY_BASE = -10.0
+        self.OSCILLATION_PENALTY_BASE = -10.0
+        
+        # Thresholds
+        self.MIN_PROGRESS_THRESHOLD = 0.01
+        self.MAX_DEVIATION_THRESHOLD = 1.0
+        self.MAX_HISTORY = 5
+        
+        # History Tracking
+        self.prev_goal_potential = None
+        self.prev_path_potential = None
+        self.position_history = []
+        self.reward_history = []
+
+    def reset(self):
+        self.prev_goal_potential = None
+        self.prev_path_potential = None
+        self.position_history = []
+        self.reward_history = []
+        
+    def compute_reward(self, current_pos: np.ndarray, prev_pos: np.ndarray, 
+                      goal_pos: np.ndarray, chunk: np.ndarray, world_theta: float) -> float:
+        reward = 0.0
+        
+        goal_pot_rew, goal_pot = self.goal_pot_rew(current_pos, goal_pos)
+        path_pot_rew, path_pot = self.path_pot_rew(current_pos, chunk)
+        
+        progress_rew, progress = self.progress_rew(prev_pos, current_pos, chunk)
+        path_follow_rew = self.path_follow_rew(current_pos, progress, chunk)
+        heading_rew = self.heading_rew(current_pos, goal_pos, world_theta)
+                
+        oscillation_penalty = self.oscillation_penalty(current_pos)
+
+        reward = goal_pot_rew + path_pot_rew + progress_rew + path_follow_rew + heading_rew + oscillation_penalty + self.LIVE_REWARD 
+        
+        # History Update
+        self.prev_goal_potential = goal_pot
+        self.prev_path_potential = path_pot
+        self.position_history.append(current_pos)
+        if len(self.position_history) > self.MAX_HISTORY:
+            self.position_history.pop(0)
+        self.reward_history.append(reward)
+        
+        reward_components = {
+            'total_reward': reward,
+            'goal_potential': goal_pot_rew,
+            'path_potential': path_pot_rew,
+            'progress': progress_rew,
+            'path_following': path_follow_rew,
+            'heading': heading_rew,
+            'oscillation_penalty': oscillation_penalty
+        }
+        
+        # Update the monitor if it exists
+        if hasattr(self, 'monitor'):
+            self.monitor.update(reward_components)
+        
+        return reward, reward_components
+    
+    def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
+        current_goal_potential = self._goal_potential(current_pos, goal_pos)        
+        if self.prev_goal_potential is None:
+            self.prev_goal_potential = current_goal_potential
+
+        goal_shaping = self.GAMMA * self.prev_goal_potential - current_goal_potential
+        return self.ALPHA_GOAL * goal_shaping, -current_goal_potential
+    
+    def path_pot_rew(self, current_pos: np.ndarray, chunk: np.ndarray) -> float:
+        current_path_potential = self._path_potential(current_pos, chunk)
+        if self.prev_path_potential is None:
+            self.prev_path_potential = current_path_potential
+
+        path_shaping = self.GAMMA * self.prev_path_potential - current_path_potential
+        return self.ALPHA_PATH * path_shaping, -current_path_potential
+    
+    def progress_rew(self, prev_pos: np.ndarray, current_pos: np.ndarray, chunk: np.ndarray) -> float:
+        progress = self._compute_progress(prev_pos, current_pos, chunk)
+        if progress > self.MIN_PROGRESS_THRESHOLD:
+            return self.PROGRESS_BASE * progress, progress
+        return 0.0, 0.0
+    
+    def path_follow_rew(self, current_pos: np.ndarray, progress: float, chunk: np.ndarray) -> float:
+        path_deviation = self._compute_path_deviation(current_pos, chunk)
+        if path_deviation > self.MAX_DEVIATION_THRESHOLD:
+            adaptive_scale = abs(self.MAX_DEVIATION_THRESHOLD - path_deviation)
+            path_follow_reward = self.DEVIATION_PENALTY_BASE * path_deviation * adaptive_scale
+            return path_follow_reward
+        elif progress > self.MIN_PROGRESS_THRESHOLD:
+            path_follow_reward = self.PATH_FOLLOW_BASE * np.exp((4/self.MAX_DEVIATION_THRESHOLD) * path_deviation)
+            return path_follow_reward
+        else:
+            return 0.0
+        
+    def heading_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, world_theta: float) -> float:
+        desired_heading = self._compute_desired_heading(current_pos, goal_pos)
+        heading_alignment = self._compute_heading_alignment(world_theta, desired_heading)
+        return self.HEADING_BASE * heading_alignment if heading_alignment < 0.0 else 0.0
+    
+    def oscillation_penalty(self, current_pos: np.ndarray) -> float:
+        if len(self.position_history) >= 3:
+            oscillation = self._compute_oscillation(current_pos)
+            return self.OSCILLATION_PENALTY_BASE * oscillation
+        return 0.0
+
+    
+    def _goal_potential(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
+        dist = np.linalg.norm(current_pos - goal_pos)
+        return dist 
+    
+    def _path_potential(self, current_pos: np.ndarray, chunk: np.ndarray) -> float:
+        # distances = [np.linalg.norm(current_pos - waypoint) for waypoint in chunk]
+        dist_line = self._point_to_line_segment_distance(current_pos, chunk[0], chunk[1])
+        dist_point_1 = np.linalg.norm(current_pos - chunk[0])
+        dist_point_2 = np.linalg.norm(current_pos - chunk[1])
+        path_potential = dist_line + min(dist_point_1, dist_point_2)
+        return path_potential
+    
+    def _compute_progress(self, prev_pos: np.ndarray, current_pos: np.ndarray, 
+                         target_pos: np.ndarray) -> float:
+        prev_dist = {"0": np.linalg.norm(prev_pos - target_pos[0]),
+                     "1": np.linalg.norm(prev_pos - target_pos[1])}
+        current_dist = {"0": np.linalg.norm(current_pos - target_pos[0]),
+                        "1": np.linalg.norm(current_pos - target_pos[1])}
+        prev_dist = min(prev_dist["0"], prev_dist["1"])
+        current_dist = min(current_dist["0"], current_dist["1"])
+        return prev_dist - current_dist
+    
+    def _compute_path_deviation(self, current_pos: np.ndarray, chunk: np.ndarray) -> float:
+        if len(chunk) < 2:
+            return np.linalg.norm(current_pos - chunk[0])
+            
+        min_dist = float('inf')
+        for i in range(len(chunk) - 1):
+            dist = self._point_to_line_segment_distance(current_pos, chunk[i], chunk[i+1])
+            min_dist = min(min_dist, dist)
+        return min_dist
+    
+    def _compute_desired_heading(self, current_pos: np.ndarray, target_pos: np.ndarray) -> float:
+        dx = target_pos[0] - current_pos[0]
+        dy = target_pos[1] - current_pos[1]
+        return np.arctan2(dy, dx)
+    
+    def _compute_heading_alignment(self, world_theta: float, desired_heading: float) -> float:
+        current_heading = world_theta
+        angle_diff = abs(current_heading - desired_heading)
+        angle_diff = min(angle_diff, 2*np.pi - angle_diff)
+        return np.cos(angle_diff)
+    
+    def _compute_oscillation(self, current_pos: np.ndarray) -> float:
+        if len(self.position_history) < 3:
+            return 0.0
+            
+        vectors = []
+        for i in range(len(self.position_history)-1):
+            v = self.position_history[i+1] - self.position_history[i]
+            vectors.append(v / (np.linalg.norm(v) + 1e-6))
+            
+        dot_products = [np.dot(vectors[i], vectors[i+1]) 
+                       for i in range(len(vectors)-1)]
+        return abs(np.mean(dot_products))
+    
+    def _point_to_line_segment_distance(self, point: np.ndarray, 
+                                      line_start: np.ndarray, 
+                                      line_end: np.ndarray) -> float:
+        line_vec = line_end - line_start
+        point_vec = point - line_start
+        line_length = np.linalg.norm(line_vec)
+        point_vec_length = np.linalg.norm(point_vec)
+        
+        if line_length == 0:
+            return point_vec_length
+            
+        t = max(0, min(1, np.dot(point_vec, line_vec) / (point_vec_length * line_length)))
+        projection = line_start + t * line_vec
+        return np.linalg.norm(point - projection)
+    
+    def out_of_boundary_penalty(self, current_pos: np.ndarray) -> float:
+        x, y = current_pos
+        if x < self.world_limits[0][0] or x > self.world_limits[0][1] or y < self.world_limits[1][0] or y > self.world_limits[1][1]:
+            return self.BOUNDARY_PENALTY
+        return 0.0

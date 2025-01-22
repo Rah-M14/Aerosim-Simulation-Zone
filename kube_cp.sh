@@ -27,20 +27,33 @@ read -p "Server's GPU : " sgpu
 # kubectl cp ./MAIN_FILES/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
 # kubectl cp ./MAIN_FILES/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/MAIN_FILES/.
 
-kubectl cp ./NAV_TEST/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Docker_Trainer.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/LiDAR_Feed.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Mod_Pegasus_App.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/New_RL_Bot_Control.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/New_RL_Bot.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/RL_Feature_Extractor_n_Model.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/RL_Simple_Models.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Test_Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
-kubectl cp ./NAV_TEST/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Docker_Trainer.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/LiDAR_Feed.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Mod_Pegasus_App.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/New_RL_Bot_Control.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/New_RL_Bot.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/RL_Feature_Extractor_n_Model.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/RL_Simple_Models.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Test_Reward_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Testing_Env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+# kubectl cp ./NAV_TEST/Traj_Gen $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/NAV_TEST/.
+
+kubectl cp ./TEST_FILES/configs.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/data_gen.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/env.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/main.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/new_reward_manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/Path_Manager.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/pretrain.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/
+kubectl cp ./TEST_FILES/RRTStar.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/reward_monitor.py $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/New_WR_World.png $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
+kubectl cp ./TEST_FILES/New_final_bc_policy.pth $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/TEST_FILES/.
 
 kubectl cp ./base_test.sh $sgpu:/isaac-sim/.
+kubectl cp ./datagen.sh $sgpu:/isaac-sim/.
 # kubectl cp ./nav_test.sh $sgpu:/isaac-sim/.
 # kubectl cp ./Final_WR_World/New_Core.usd $sgpu:/isaac-sim/standalone_examples/api/omni.isaac.kit/Final_WR_World/.
 

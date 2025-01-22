@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Tuple, Union
 from configs import RewardConfig
+import wandb
 
 rew_config = RewardConfig()
 
@@ -14,7 +15,7 @@ class RewardManager:
         self.THETA_OVERDRIVE_PENALTY = -10.0
 
         # PATH REWARDS
-        self.PATH_FOLLOWING_FACTOR = 5
+        self.PATH_FOLLOWING_FACTOR = 10
         self.PATH_CORRIDOR_WIDTH = 0.5
         self.MAX_PATH_DEVIATION = 1.0
         self.DEVIATION_PENALTY_FACTOR = -5
@@ -36,23 +37,43 @@ class RewardManager:
         # BOUNDARY LIMITS
         self.BOUNDARY_LIMITS = np.array([[-8, 8], [-6, 6]])
         self.BOUNDARY_PENALTY = -10000.0
-        
+
+        # Action smoothness parameters
+        self.L_SMOOTHNESS_PENALTY = -10.0
+        self.THETA_SMOOTHNESS_PENALTY = -30.0
+        self.ALLOWABLE_L_CHANGE = 0.15  
+        self.ALLOWABLE_THETA_CHANGE = 0.15  
+        self.MAX_PENALTY_THRESHOLD = 1.0 
+        self.prev_L = None
+        self.prev_theta = None
+
+        self.reward = 0
+        self.episode_reward = 0
+
+    def ep_log(self, episode_num):
+        # wandb.log({"Learning_Curve": self.episode_reward, "episode_num": episode_num})
+        self.episode_reward = 0
+        return None
+
     def compute_reward(
         self,
         current_pos: np.ndarray,
         prev_pos: np.ndarray,
         goal_pos: np.ndarray,
         chunk: np.ndarray,
-        action: np.ndarray
+        action: np.ndarray  # [L, theta]
     ) -> float:
+        self.reward = 0
         simple_reward = self.simple_reward(current_pos, goal_pos, chunk)
         path_reward = self.path_following_reward(current_pos, chunk)
         cosine_reward = self.scale_direction_reward(current_pos, prev_pos, goal_pos)
         vis_reward = self.visiting_reward(current_pos, chunk)
+        smoothness_reward = self.action_smoothness_reward(action)
 
-        reward = simple_reward + path_reward + cosine_reward + vis_reward + self.LIVE_REWARD
-        
-        return reward
+        self.reward = simple_reward + path_reward + cosine_reward + vis_reward + smoothness_reward + self.LIVE_REWARD
+        self.episode_reward += self.reward
+
+        return self.reward
     
     def simple_reward(self, current_pos, goal_pos, chunk):
         n_dist = np.linalg.norm(chunk[0] - current_pos)
@@ -125,3 +146,39 @@ class RewardManager:
         elif np.any(current_pos[1] < self.BOUNDARY_LIMITS[1][0]) or np.any(current_pos[1] > self.BOUNDARY_LIMITS[1][1]):
             return self.BOUNDARY_PENALTY
         return 0
+
+    def action_smoothness_reward(self, action: np.ndarray) -> float:
+        L, theta = action
+        reward = 0.2
+        
+        if self.prev_L is not None and self.prev_theta is not None:
+            # Handle L smoothness
+            if abs(self.prev_L) < 1e-6:  # If previous L was close to zero
+                L_change = abs(L)  # Consider absolute new value
+            else:
+                # Consider both magnitude and direction changes
+                L_change = (abs(L - self.prev_L) / (self.prev_L + 1e-6))
+            
+            # Handle theta smoothness
+            if abs(self.prev_theta) < 1e-6:  # If previous theta was close to zero
+                theta_change = abs(theta)  # Consider absolute new value
+            else:
+                # Consider both magnitude and direction changes
+                theta_change = (abs(theta - self.prev_theta) / (self.prev_theta + 1e-6))
+            
+            # Apply penalties for changes beyond allowable thresholds
+            if L_change > self.ALLOWABLE_L_CHANGE:
+                # excess_change = L_change - self.ALLOWABLE_L_CHANGE
+                L_penalty = self.L_SMOOTHNESS_PENALTY * min(L_change, self.MAX_PENALTY_THRESHOLD)
+                reward += L_penalty
+            
+            if theta_change > self.ALLOWABLE_THETA_CHANGE:
+                # excess_change = theta_change - self.ALLOWABLE_THETA_CHANGE
+                theta_penalty = self.THETA_SMOOTHNESS_PENALTY * min(theta_change, self.MAX_PENALTY_THRESHOLD)
+                reward += theta_penalty
+        
+        # Update previous values
+        self.prev_L = L
+        self.prev_theta = theta
+        
+        return reward

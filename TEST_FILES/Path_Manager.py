@@ -36,24 +36,34 @@ class PathManager:
         return False
     
     def get_next_chunk(self, current_pos):
-        # if not self.needs_new_chunk(current_pos):
-        #     return self.new_chunk
-        # self.current_index += self.get_chunk_progress(current_pos)
         if self.current_path is None or len(self.current_path) == 0:
-            return np.array([])
+            # Return a default chunk if no path exists
+            return np.tile(current_pos, (self.chunk_size, 1))
 
-        if len(self.new_chunk) > 0 and np.linalg.norm(current_pos - self.new_chunk[0]) < 0.01:
+        # Update current_index if close to current waypoint
+        if len(self.new_chunk) > 0 and np.linalg.norm(current_pos - self.new_chunk[0]) < 0.2:
             self.current_index += 1
+        elif np.linalg.norm(current_pos - self.new_chunk[1]) < 0.2:
+            self.current_index += 2
 
-        remaining_path = np.array(self.current_path[self.current_index:])
-        chunk = remaining_path[:self.chunk_size]
-        self.new_chunk = np.pad(
-            chunk,
-            pad_width=((0, self.chunk_size - len(chunk)), (0, 0)),
-            mode='edge'
-        )
-        assert self.new_chunk.shape == (self.chunk_size, 2), f"Incorrect shape: {self.new_chunk.shape}"
+        # Get remaining path from current index
+        remaining_path = self.current_path[self.current_index:]
         
+        if len(remaining_path) == 0:
+            # If no remaining path, return last position repeated
+            return np.tile(current_pos, (self.chunk_size, 1))
+        
+        # Take next chunk_size points or pad with last point if needed
+        if len(remaining_path) >= self.chunk_size:
+            self.new_chunk = remaining_path[:self.chunk_size]
+        else:
+            # Pad with the last waypoint if path is shorter than chunk_size
+            last_point = remaining_path[-1]
+            padding_size = self.chunk_size - len(remaining_path)
+            padding = np.tile(last_point, (padding_size, 1))
+            self.new_chunk = np.vstack([remaining_path, padding])
+        
+        assert self.new_chunk.shape == (self.chunk_size, 2), f"Incorrect chunk shape: {self.new_chunk.shape}"
         return self.new_chunk
     
     # def get_chunk_progress(self, current_pos):

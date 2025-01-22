@@ -299,8 +299,8 @@ if __name__ == "__main__":
     try:
         for i in range(100):
             print(f"\nTest {i+1}/100")
-            start_pos = gen_goal_pose()
-            goal_pos = gen_goal_pose()
+            start_pos = np.array([-14.0, 5.0])
+            goal_pos = np.array([2.0, -6.0])
             result = planner.plan(start_pos, goal_pos)
             
             print(f"Start: ({result['start'][0]:.2f}, {result['start'][1]:.2f})")
