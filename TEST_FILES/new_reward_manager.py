@@ -22,7 +22,7 @@ class RewardManager:
         self.ALPHA_PATH = 0.3
         
         # Progress Rews
-        self.PROGRESS_BASE = 2.0
+        self.PROGRESS_BASE = 20.0
         self.PATH_FOLLOW_BASE = 1.0
         self.HEADING_BASE = 10.0
         
@@ -65,7 +65,8 @@ class RewardManager:
         # History Update
         self.prev_goal_potential = goal_pot
         self.prev_path_potential = path_pot
-        self.position_history.append(current_pos)
+        triple = np.concatenate([current_pos, np.array([world_theta])])
+        self.position_history.append(triple)
         if len(self.position_history) > self.MAX_HISTORY:
             self.position_history.pop(0)
         self.reward_history.append(reward)
@@ -106,7 +107,7 @@ class RewardManager:
         progress = self._compute_progress(prev_pos, current_pos, chunk)
         if progress > self.MIN_PROGRESS_THRESHOLD:
             return self.PROGRESS_BASE * progress, progress
-        return 0.0, 0.0
+        return -1, 0.0
     
     def path_follow_rew(self, current_pos: np.ndarray, progress: float, chunk: np.ndarray) -> float:
         path_deviation = self._compute_path_deviation(current_pos, chunk)
@@ -128,8 +129,13 @@ class RewardManager:
     def oscillation_penalty(self, current_pos: np.ndarray) -> float:
         if len(self.position_history) >= 3:
             oscillation = self._compute_oscillation(current_pos)
-            return self.OSCILLATION_PENALTY_BASE * oscillation
+            detection = self._detect_oscillation(self.position_history)
+            penalty = 0.0
+            if detection['is_oscillating']:
+                penalty = detection['heading_variance'] + (detection['cumulative_curvature'] - 5)
+            return (self.OSCILLATION_PENALTY_BASE * oscillation) - np.clip(penalty, 0.0, 100.0)
         return 0.0
+    
 
     
     def _goal_potential(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
@@ -187,6 +193,35 @@ class RewardManager:
         dot_products = [np.dot(vectors[i], vectors[i+1]) 
                        for i in range(len(vectors)-1)]
         return abs(np.mean(dot_products))
+    
+    def _detect_oscillation(self, history):
+        states = np.array(history)
+
+        # Calculate distances between consecutive states
+        distances = np.linalg.norm(np.diff(states[:,0:2], axis=0))
+        distance_variance = np.var(distances)
+
+        # Calculate orientation changes (wrapped to [-pi, pi])
+        delta_theta = np.diff(states[:, 2])
+        delta_theta = (delta_theta + np.pi) % (2 * np.pi) - np.pi  # Wrap to [-pi, pi]
+        heading_variance = np.var(delta_theta)
+
+        # Calculate curvature
+        curvatures = np.abs(delta_theta) / (distances + 1e-6)
+        cumulative_curvature = np.sum(curvatures)
+
+        # Oscillation detection heuristic: high variance in distance or heading, or high curvature
+        is_oscillating = (
+            distance_variance > 0.05 or  # Tunable threshold for distance variance
+            heading_variance > 0.1 or   # Tunable threshold for heading variance
+            cumulative_curvature > 5    # Tunable threshold for curvature
+        )
+        return {
+            'distance_variance': distance_variance,
+            'heading_variance': heading_variance,
+            'cumulative_curvature': cumulative_curvature,
+            'is_oscillating': is_oscillating
+        }
     
     def _point_to_line_segment_distance(self, point: np.ndarray, 
                                       line_start: np.ndarray, 

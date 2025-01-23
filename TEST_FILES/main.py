@@ -4,6 +4,7 @@ import numpy as np
 import wandb
 import argparse
 import torch
+import torch.nn as nn
 
 from stable_baselines3 import SAC, PPO, TD3
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
@@ -12,8 +13,10 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.utils import safe_mean
 from tqdm.auto import tqdm
+
 from env import PathFollowingEnv
 from configs import ObservationConfig
+from feature_ex import SocialNavigationExtractor
 
 obs_config = ObservationConfig()
 
@@ -35,14 +38,15 @@ class ProgressBarCallback(BaseCallback):
         self.pbar = None
 
 class WandbCallback(BaseCallback):
-    def __init__(self, verbose=0):
+    def __init__(self, enable_wandb: bool = False, verbose=0):
         super().__init__(verbose)
         self.global_step = 0
+        self.enable_wandb = enable_wandb
 
     def _on_step(self):
         self.global_step += 1
         # Log training metrics and Learning Curve
-        if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
+        if self.enable_wandb and (len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0):
             wandb.log({"train/global_step": self.global_step})
             wandb.log({"train/episode_reward": safe_mean([ep_info["r"] for ep_info in self.model.ep_info_buffer]), "train/global_step": self.global_step})
             wandb.log({"train/episode_length": safe_mean([ep_info["l"] for ep_info in self.model.ep_info_buffer]), "train/global_step": self.global_step})
@@ -140,10 +144,21 @@ def main(args):
 
     policy_kwargs = dict(
         net_arch=dict(
-            pi=[256, 512, 512, 256],
-            qf=[256, 512, 512, 256]
+            pi=[32, 64, 128, 128, 128, 128, 128],
+            qf=[32, 64, 128, 128, 128, 128, 128]
         )
     )
+
+    # policy_kwargs = dict(
+    # features_extractor_class=SocialNavigationExtractor,
+    # features_extractor_kwargs=dict(
+    #     lidar_points=360,
+    #     path_points=10,
+    #     social_features=8
+    # ),
+    # net_arch=dict(pi=[32, 64, 128, 256, 128], qf=[32, 64, 128, 256, 128]),  # Policy network architecture
+    # activation_fn=nn.ReLU
+    # )
 
     # Initialize model
     if given_ckpt:
@@ -252,7 +267,7 @@ def main(args):
             render=False
         ),
         CkptAutoRemovalCallback(model_dir, algorithm, keep_num=3, frequency=50000),
-        WandbCallback(),
+        WandbCallback(enable_wandb=args.wandb_log),
         ProgressBarCallback(total_timesteps)
     ]
 
@@ -280,7 +295,11 @@ def main(args):
     finally:
         wandb.finish()
 
-def evaluate_model(algo, model_path, num_episodes=10):
+def evaluate_model(args, num_episodes=100):
+
+    algo = args.algo.upper()
+    model_path = args.ckpt_path
+
     wandb.init(
         project="path-following-eval",
         name="evaluation",
@@ -291,12 +310,86 @@ def evaluate_model(algo, model_path, num_episodes=10):
     env = DummyVecEnv([lambda: env])
     # env = VecNormalize.load(f"models/vec_normalize.pkl", env)
 
-    if algo == "SAC":   
+    policy_kwargs = {
+                "net_arch": dict(
+                    pi=[64, 64, 64, 64, 64, 64, 64, 64],
+                    qf=[64, 64, 64, 64, 64, 64, 64, 64]
+                ),
+                # "optimizer_class": optim.AdamW,
+                # "optimizer_kwargs": dict(weight_decay=1e-5)
+            }
+
+    if model_path and algo == "SAC":   
         model = SAC.load(model_path)
-    elif algo == "PPO":
+    elif model_path and algo == "PPO":
         model = PPO.load(model_path)
-    elif algo == "TD3":
+    elif model_path and algo == "TD3":
         model = TD3.load(model_path)
+
+    elif algo == "SAC":
+        model = SAC(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            buffer_size=1000000,
+            batch_size=256,
+            ent_coef='auto',
+            gamma=0.99,
+            tau=0.005,
+            train_freq=1,
+            gradient_steps=1,
+            learning_starts=10000,
+            policy_kwargs=policy_kwargs,
+            verbose=1,
+            )
+    elif algo == "PPO":
+            model = PPO(
+                "MlpPolicy",
+                env,
+                learning_rate=3e-4,
+                verbose=1,
+                n_steps=2048,
+                n_epochs=10,
+                batch_size=64,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.01,
+                vf_coef=0.5,
+                max_grad_norm=0.5,
+                normalize_advantage=True,
+                policy_kwargs=policy_kwargs,
+            )
+    elif algo == "TD3":
+        n_actions = env.action_space.shape[-1]
+        action_noise = NormalActionNoise(
+            mean=np.zeros(n_actions),
+            sigma=0.1 * np.ones(n_actions)
+            )
+
+        model = TD3(
+            "MlpPolicy",
+            env,
+            learning_rate=0.001,
+            buffer_size=1000000,
+            learning_starts=100,
+            batch_size=256,
+            tau=0.005,
+            gamma=0.99,
+            train_freq=1,
+            gradient_steps=1,
+            action_noise=action_noise,
+            policy_delay=2,
+            target_policy_noise=0.2,
+            target_noise_clip=0.5,
+            # optimize_memory_usage=True,
+            verbose=1
+            )
+
+    if args.policy:
+        pretrained_policy = torch.load(args.policy)
+        pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
+        model.policy.load_state_dict(pretrained_policy['model_state_dict'])
 
     rewards = []
     
@@ -308,6 +401,7 @@ def evaluate_model(algo, model_path, num_episodes=10):
             
             while not done:
                 action, _ = model.predict(obs, deterministic=True)
+                print(f"Action: {action}")
                 obs, reward, done, info = env.step(action)
                 episode_reward += reward[0]
                 
@@ -352,6 +446,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.evaluate:
-        evaluate_model(args.algo)
+        evaluate_model(args)
     else:
         main(args)

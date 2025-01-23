@@ -11,13 +11,15 @@ import matplotlib.pyplot as plt
 # import matplotlib.transforms as mtransforms
 import os
 import cv2
+from PIL import Image
 
-from LiDAR import *
+from LiDAR import get_lidar_points
 
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
 from configs import ObservationConfig
-from new_reward_manager import RewardManager
+# from new_reward_manager import RewardManager
+from simple_rew_manager import RewardManager
 from reward_monitor import RewardMonitor
 
 obs_config = ObservationConfig()
@@ -27,6 +29,10 @@ class PathFollowingEnv(gym.Env):
         super().__init__()
         
         self.image_path = image_path
+        img = np.array(Image.open(self.image_path).convert('L'))  # Convert to grayscale
+        self.binary_img = (img > 128).astype(np.uint8)  # Threshold to create a binary map
+        self.binary_img = cv2.resize(self.binary_img, (0,0), fx=0.25, fy=0.25)
+        
         self.chunk_size = chunk_size
         self.name = algo_run
         self.headless = headless
@@ -59,15 +65,24 @@ class PathFollowingEnv(gym.Env):
         self.max_theta = np.pi  # Maximum angle the agent can move in one step
 
         # LiDAR Parameters
-        self.lidar_specs = [1, 360, 720, 200] # [resolution, FOV, #Rays, distance]
+        self.lidar_specs = [1, 360, 720, 500] # [resolution, FOV, #Rays, distance]
+        self.lidar_points = None
+        self.lidar_bounds = ((-10, 8), (10, -8))  # (left_corner, right_corner)
 
+        # self.action_space = spaces.Box(
+        #     low=np.array([0.0, -1.0]),
+        #     high=np.array([1.0, 1.0]),
+        #     shape=(2,),
+        #     dtype=np.float32
+        # )
+        
         self.action_space = spaces.Box(
-            low=np.array([0.0, -1.0]),
-            high=np.array([1.0, 1.0]),
-            shape=(2,),
+            low=np.array([0.0, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0, -1.0]),
+            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            shape=(10,),
             dtype=np.float32
         )
-        
+
         # Obs: [
         #   current_x, current_y,                   # Current position (2)
         #   goal_x, goal_y,                         # Final goal position (2)
@@ -85,7 +100,7 @@ class PathFollowingEnv(gym.Env):
             dtype=np.float32
         )
 
-        self.path_manager = PathManager(image_path, chunk_size=chunk_size)
+        self.path_manager = PathManager(self.image_path, chunk_size=chunk_size)
         self.reward_manager = RewardManager(self.agent_theta, monitor=None)
         
         # Initialize reward monitor if enabled
@@ -103,7 +118,6 @@ class PathFollowingEnv(gym.Env):
 
             wandb.define_metric("Action_L", step_metric="RL_step")
             wandb.define_metric("Action_Theta", step_metric="RL_step")
-            # wandb.define_metric("Total Reward (Step)", step_metric="RL_step")
             wandb.define_metric("Goal Reached", step_metric="RL_step")
             wandb.define_metric("Timeout", step_metric="RL_step")
             wandb.define_metric("Boundary", step_metric="RL_step")
@@ -131,7 +145,7 @@ class PathFollowingEnv(gym.Env):
             
             # Create named window for OpenCV
             cv2.namedWindow('Path Following Environment - ' + self.name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Path Following Environment - ' + self.name, 800, 600)
+            cv2.resizeWindow('Path Following Environment - ' + self.name, 800*2, 600)
         
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, Dict]:
         super().reset(seed=seed)
@@ -155,8 +169,8 @@ class PathFollowingEnv(gym.Env):
 
         self.current_pos = self.gen_bot_pos()
         self.prev_pos = self.current_pos
-        # self.goal_pos = self.gen_bot_pos()
-        self.goal_pos = self.current_pos + np.random.uniform(-3.0, 3.0, size=2)
+        self.goal_pos = self.gen_bot_pos()
+        # self.goal_pos = self.current_pos + np.random.uniform(-3.0, 3.0, size=2)
 
         # Reset path manager and plan new path
         self.path_manager.reset()
@@ -189,7 +203,8 @@ class PathFollowingEnv(gym.Env):
             prev_pos=self.prev_pos,
             goal_pos=self.goal_pos,
             chunk=self.current_chunk,
-            world_theta=self.agent_theta
+            world_theta=self.agent_theta,
+            timestep=self.current_step
         )
         
         self.episode_reward += reward
@@ -250,6 +265,16 @@ class PathFollowingEnv(gym.Env):
         if self.wandb_enabled:
             wandb.log(reward_components)
 
+        # Get LiDAR points after updating position
+        # self.lidar_points = get_lidar_points(
+        #     self.binary_img,
+        #     self.current_pos,
+        #     self.env_world_limits,
+        #     num_rays=360,
+        #     max_range=4.0
+        # )
+        # print(self.lidar_points.shape)
+
         if not self.headless:
             self.render()
         
@@ -298,144 +323,226 @@ class PathFollowingEnv(gym.Env):
     
     def render(self):
         try:
-            img = np.zeros((600, 800, 3), dtype=np.uint8)
+            # Create two side-by-side windows with fixed dimensions and a gap
+            img_width, img_height = 800, 600
+            gap_size = 20  # Gap between panels
+            combined_img = np.zeros((img_height, img_width * 2 + gap_size, 3), dtype=np.uint8)
             
-            # Convert world coordinates to image coordinates
-            def world_to_img(x, y):
-                img_x = int((x + 8) * 50)  # Scale and shift x
-                img_y = int((6 - y) * 50)  # Scale and shift y
-                return img_x, img_y
+            # Load and process the world image for the left panel
+            world_img = cv2.imread(self.image_path, cv2.IMREAD_GRAYSCALE)
+            if world_img is None:
+                raise ValueError(f"Failed to load image from {self.image_path}")
             
-            # Draw grid
-            for x in range(-8, 9):
-                x_img = int((x + 8) * 50)
-                cv2.line(img, (x_img, 0), (x_img, 600), (50, 50, 50), 1)
-            for y in range(-6, 7):
-                y_img = int((6 - y) * 50)
-                cv2.line(img, (0, y_img), (800, y_img), (50, 50, 50), 1)
+            # Resize and convert to BGR
+            world_img = cv2.resize(world_img, (img_width, img_height))
+            world_img = cv2.cvtColor(world_img, cv2.COLOR_GRAY2BGR)
             
-            # Get LiDAR points using actual world limits for simulation
-            # points = lidar_simulation_from_image(
-            #     image_path=self.image_path, 
-            #     left_corner=(-10, 7),  # Fixed world limits for LiDAR simulation
-            #     right_corner=(10, -7), 
-            #     start=self.current_pos, 
-            #     end=self.goal_pos, 
-            #     resolution=self.lidar_specs[0], 
-            #     fov=self.lidar_specs[1], 
-            #     num_rays=self.lidar_specs[2], 
-            #     max_distance=self.lidar_specs[3]
-            # )
+            # Copy the world image to the left panel
+            combined_img[:, :img_width] = world_img
             
-            # # Draw LiDAR points
-            # for point in points:
-            #     world_x = point[0]/self.lidar_specs[0] + self.current_pos[0]
-            #     world_y = point[1]/self.lidar_specs[0] + self.current_pos[1]
-            #     img_x, img_y = world_to_img(world_x, world_y)
-            #     cv2.circle(img, (img_x, img_y), 2, (0, 0, 255), -1)  # Red dots for LiDAR points
+            # Fill gap with dark color
+            combined_img[:, img_width:img_width+gap_size] = (30, 30, 30)
+            
+            # Adjust coordinate conversion functions for the right panel
+            def world_to_img_left(x, y):
+                # Transform from world coordinates to image coordinates using env limits
+                x_range = self.env_world_limits[0][1] - self.env_world_limits[0][0]
+                y_range = self.env_world_limits[1][1] - self.env_world_limits[1][0]
                 
-                # # Only draw points within the visible area
-                # if -8 <= world_x <= 8 and -6 <= world_y <= 6:
-                #     img_x, img_y = world_to_img(world_x, world_y)
-                #     if 0 <= img_x < 800 and 0 <= img_y < 600:  # Check if point is within image bounds
-                #         cv2.circle(img, (img_x, img_y), 2, (0, 0, 255), -1)  # Red dots for LiDAR points
+                img_x = int((x - self.env_world_limits[0][0]) * (img_width / x_range))
+                img_y = int((self.env_world_limits[1][1] - y) * (img_height / y_range))
+                return img_x, img_y
+
+            def world_to_img_right(x, y):
+                # Transform from world coordinates to image coordinates using env limits
+                x_range = self.env_world_limits[0][1] - self.env_world_limits[0][0]
+                y_range = self.env_world_limits[1][1] - self.env_world_limits[1][0]
+                
+                img_x = int((x - self.env_world_limits[0][0]) * (img_width / x_range)) + img_width + gap_size
+                img_y = int((self.env_world_limits[1][1] - y) * (img_height / y_range))
+                return img_x, img_y
+
+            # Draw grid on right panel using env_world_limits
+            x_min, x_max = self.env_world_limits[0]
+            y_min, y_max = self.env_world_limits[1]
             
-            # Draw path
+            # Draw vertical grid lines
+            for x in range(int(x_min), int(x_max) + 1):
+                x_img = world_to_img_right(x, 0)[0]
+                cv2.line(combined_img, (x_img, 0), (x_img, img_height), (50, 50, 50), 1)
+                
+            # Draw horizontal grid lines
+            for y in range(int(y_min), int(y_max) + 1):
+                y_img = world_to_img_right(0, y)[1]
+                cv2.line(combined_img, (img_width + gap_size, y_img), 
+                        (img_width * 2 + gap_size, y_img), (50, 50, 50), 1)
+
+            # Draw reward monitor if it exists (in bottom right corner)
+            if hasattr(self.reward_manager, 'monitor') and self.reward_manager.monitor is not None:
+                monitor_data = self.reward_manager.monitor.get_data()
+                if monitor_data is not None and len(monitor_data) > 1:
+                    # Define reward plot area
+                    plot_width = 200
+                    plot_height = 100
+                    plot_margin = 20
+                    plot_x = img_width * 2 - plot_width - plot_margin
+                    plot_y = img_height - plot_height - plot_margin
+                    
+                    # Draw plot background
+                    cv2.rectangle(combined_img, 
+                                (plot_x, plot_y), 
+                                (plot_x + plot_width, plot_y + plot_height), 
+                                (30, 30, 30), -1)  # Dark gray background
+                    cv2.rectangle(combined_img, 
+                                (plot_x, plot_y), 
+                                (plot_x + plot_width, plot_y + plot_height), 
+                                (100, 100, 100), 1)  # Light gray border
+                    
+                    # Scale reward data to fit plot
+                    rewards = np.array(monitor_data)
+                    min_reward = np.min(rewards)
+                    max_reward = np.max(rewards)
+                    reward_range = max_reward - min_reward if max_reward != min_reward else 1
+                    
+                    # Draw reward curve
+                    points = []
+                    for i in range(len(rewards)):
+                        x = plot_x + int((i / len(rewards)) * plot_width)
+                        normalized_reward = (rewards[i] - min_reward) / reward_range
+                        y = plot_y + plot_height - int(normalized_reward * plot_height)
+                        points.append((x, y))
+                    
+                    # Draw the curve
+                    for i in range(len(points) - 1):
+                        cv2.line(combined_img, points[i], points[i + 1], (0, 0, 255), 1)
+                    
+                    # Add min/max labels
+                    font_scale = 0.4
+                    cv2.putText(combined_img, f"max: {max_reward:.1f}", 
+                               (plot_x + 5, plot_y + 15), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1)
+                    cv2.putText(combined_img, f"min: {min_reward:.1f}", 
+                               (plot_x + 5, plot_y + plot_height - 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1)
+
+            # Draw path on both panels
             if self.path_manager.get_full_path() is not None:
-                path = np.array(self.path_manager.get_full_path())
+                path = self.path_manager.get_full_path()
                 if len(path) > 1:
                     for i in range(len(path) - 1):
-                        pt1 = world_to_img(path[i][0], path[i][1])
-                        pt2 = world_to_img(path[i+1][0], path[i+1][1])
-                        cv2.line(img, pt1, pt2, (150, 150, 150), 1)
-            
-            # Draw current chunk
-            if self.current_chunk is not None and len(self.current_chunk) > 1:
-                for i in range(len(self.current_chunk) - 1):
-                    pt1 = world_to_img(self.current_chunk[i][0], self.current_chunk[i][1])
-                    pt2 = world_to_img(self.current_chunk[i+1][0], self.current_chunk[i+1][1])
-                    cv2.line(img, pt1, pt2, (0, 165, 255), 2)
-            
-            # Draw agent as triangle with red tip
-            agent_pos = world_to_img(self.current_pos[0], self.current_pos[1])
-            triangle_size = 15
-            
-            # Calculate triangle vertices
-            angle = self.agent_theta  # The angle in radians
-            tip = (
-                int(agent_pos[0] + np.cos(angle) * triangle_size),
-                int(agent_pos[1] - np.sin(angle) * triangle_size)
-            )
-            base_l = (
-                int(agent_pos[0] - np.cos(angle) * triangle_size - np.sin(angle) * triangle_size),
-                int(agent_pos[1] + np.sin(angle) * triangle_size - np.cos(angle) * triangle_size)
-            )
-            base_r = (
-                int(agent_pos[0] - np.cos(angle) * triangle_size + np.sin(angle) * triangle_size),
-                int(agent_pos[1] + np.sin(angle) * triangle_size + np.cos(angle) * triangle_size)
-            )
-            
-            # Draw main triangle body (cyan)
-            triangle_pts = np.array([tip, base_l, base_r], np.int32)
-            cv2.fillPoly(img, [triangle_pts], (255, 255, 0))  # Cyan body
-            
-            # Draw red tip
-            tip_length = triangle_size
-            red_tip = (
-                int(agent_pos[0] + np.cos(angle) * triangle_size),
-                int(agent_pos[1] - np.sin(angle) * triangle_size)
-            )
-            red_base_l = (
-                int(agent_pos[0] + np.cos(angle) * (triangle_size - tip_length) - np.sin(angle) * (tip_length//2)),
-                int(agent_pos[1] - np.sin(angle) * (triangle_size - tip_length) - np.cos(angle) * (tip_length//2))
-            )
-            red_base_r = (
-                int(agent_pos[0] + np.cos(angle) * (triangle_size - tip_length) + np.sin(angle) * (tip_length//2)),
-                int(agent_pos[1] - np.sin(angle) * (triangle_size - tip_length) + np.cos(angle) * (tip_length//2))
-            )
-            red_triangle = np.array([red_tip, red_base_l, red_base_r], np.int32)
-            cv2.fillPoly(img, [red_triangle], (0, 0, 255))  # Red tip
-            
-            # Draw goal
-            goal_pos = world_to_img(self.goal_pos[0], self.goal_pos[1])
-            cv2.circle(img, goal_pos, 15, (0, 255, 0), -1)
+                        # Left panel
+                        start_l = world_to_img_left(path[i][0], path[i][1])
+                        end_l = world_to_img_left(path[i+1][0], path[i+1][1])
+                        cv2.line(combined_img, start_l, end_l, (0, 255, 255), 2)
+                        
+                        # Right panel
+                        start_r = world_to_img_right(path[i][0], path[i][1])
+                        end_r = world_to_img_right(path[i+1][0], path[i+1][1])
+                        cv2.line(combined_img, start_r, end_r, (0, 255, 255), 2)
 
+            # Draw agent on both panels
+            for is_left in [True, False]:
+                world_to_img = world_to_img_left if is_left else world_to_img_right
+                
+                # Get agent position in image coordinates
+                agent_pos = world_to_img(self.current_pos[0], self.current_pos[1])
+                
+                # Triangle parameters
+                triangle_size = 15
+                angle = self.agent_theta
+                
+                # Calculate triangle vertices
+                tip = (
+                    int(agent_pos[0] + np.cos(angle) * triangle_size),
+                    int(agent_pos[1] - np.sin(angle) * triangle_size)
+                )
+                base_l = (
+                    int(agent_pos[0] - np.cos(angle + np.pi/6) * triangle_size),
+                    int(agent_pos[1] + np.sin(angle + np.pi/6) * triangle_size)
+                )
+                base_r = (
+                    int(agent_pos[0] - np.cos(angle - np.pi/6) * triangle_size),
+                    int(agent_pos[1] + np.sin(angle - np.pi/6) * triangle_size)
+                )
+                
+                # Draw yellow triangle body
+                triangle_pts = np.array([tip, base_l, base_r], np.int32)
+                cv2.fillPoly(combined_img, [triangle_pts], (0, 255, 255))  # Yellow fill
+                
+                # Draw red tip
+                tip_size = 5
+                red_tip = (
+                    int(agent_pos[0] + np.cos(angle) * triangle_size),
+                    int(agent_pos[1] - np.sin(angle) * triangle_size)
+                )
+                cv2.circle(combined_img, red_tip, tip_size, (0, 0, 255), -1)  # Red circle at tip
+                
+                # Draw goal
+                goal_pos = world_to_img(self.goal_pos[0], self.goal_pos[1])
+                cv2.circle(combined_img, goal_pos, 10, (0, 255, 0), -1)  # Green circle
+
+            # Draw LiDAR points on both panels
+            # if self.lidar_points is not None and len(self.lidar_points) > 0:
+            #     # Draw rays and points
+            #     for point in self.lidar_points:
+            #         # Convert LiDAR points to world coordinates
+            #         world_x = self.current_pos[0] + point[0]
+            #         world_y = self.current_pos[1] + point[1]
+                    
+            #         # Draw on left panel
+            #         left_x, left_y = world_to_img_left(world_x, world_y)
+            #         robot_left = world_to_img_left(self.current_pos[0], self.current_pos[1])
+            #         # cv2.line(combined_img, robot_left, (left_x, left_y), (0, 0, 255), 1)  # Red ray
+            #         cv2.circle(combined_img, (left_x, left_y), 2, (255, 0, 0), -1)  # Blue dot
+                    
+            #         # Draw on right panel
+            #         right_x, right_y = world_to_img_right(world_x, world_y)
+            #         robot_right = world_to_img_right(self.current_pos[0], self.current_pos[1])
+            #         # cv2.line(combined_img, robot_right, (right_x, right_y), (0, 0, 255), 1)  # Red ray
+            #         cv2.circle(combined_img, (right_x, right_y), 2, (255, 0, 0), -1)  # Blue dot
+
+            # Add text overlay on left panel
             info_text = [
                 f"Episode: {self.episode_num}",
                 f"Step: {self.current_step}",
                 f"Reward: {self.episode_reward:.2f}",
-                f"G_Distance: {np.linalg.norm(self.current_pos - self.goal_pos):.2f}",
-                f"N_Distance: {np.linalg.norm(self.current_pos - self.current_chunk[0]):.2f}",
+                f"Distance to Goal: {np.linalg.norm(self.current_pos - self.goal_pos):.2f}",
                 f"Angle: {np.degrees(self.agent_theta):.1f}"
             ]
             
             for i, text in enumerate(info_text):
-                cv2.putText(img, text, (10, 30 + i * 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
-            
-            if hasattr(self.reward_manager, 'monitor'):
-                reward_info = [
-                    f"Episode Reward: {self.episode_reward:.2f}",
-                    f"Current Reward: {self.reward_manager.monitor.histories['total_reward'][-1]:.2f}" if self.reward_manager.monitor.histories['total_reward'] else "N/A",
-                    f"Goal Potential: {self.reward_manager.monitor.histories['goal_potential'][-1]:.2f}" if self.reward_manager.monitor.histories['goal_potential'] else "N/A",
-                    f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1]:.2f}" if self.reward_manager.monitor.histories['path_potential'] else "N/A",
-                    f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1]:.2f}" if self.reward_manager.monitor.histories['path_following'] else "N/A",
-                    f"Progress: {self.reward_manager.monitor.histories['progress'][-1]:.2f}" if self.reward_manager.monitor.histories['progress'] else "N/A",
-                    f"Heading: {self.reward_manager.monitor.histories['heading'][-1]:.2f}" if self.reward_manager.monitor.histories['heading'] else "N/A",
-                    f"Oscillation Penalty: {self.reward_manager.monitor.histories['oscillation_penalty'][-1]:.2f}" if self.reward_manager.monitor.histories['oscillation_penalty'] else "N/A"
+                cv2.putText(combined_img, text, (10, 30 + i * 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            # Add reward component text on right panel if monitor is enabled
+            if hasattr(self.reward_manager, 'monitor') and self.reward_manager.monitor is not None:
+                reward_text = [
+                    "Reward Components:",
+                    # f"Success: {self.reward_manager.monitor.histories['success_reward'][-1] if len(self.reward_manager.monitor.histories['success_reward']) > 0 else 0:.2f}",
+                    # f"Timeout: {self.reward_manager.monitor.histories['timeout_penalty'][-1] if len(self.reward_manager.monitor.histories['timeout_penalty']) > 0 else 0:.2f}",
+                    # f"Boundary: {self.reward_manager.monitor.histories['boundary_penalty'][-1] if len(self.reward_manager.monitor.histories['boundary_penalty']) > 0 else 0:.2f}",
+                    f"Goal Potential: {self.reward_manager.monitor.histories['goal_potential'][-1] if len(self.reward_manager.monitor.histories['goal_potential']) > 0 else 0:.2f}",
+                    f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1] if len(self.reward_manager.monitor.histories['path_potential']) > 0 else 0:.2f}",
+                    f"Progress: {self.reward_manager.monitor.histories['progress'][-1] if len(self.reward_manager.monitor.histories['progress']) > 0 else 0:.2f}",
+                    f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1] if len(self.reward_manager.monitor.histories['path_following']) > 0 else 0:.2f}",
+                    f"Heading: {self.reward_manager.monitor.histories['heading'][-1] if len(self.reward_manager.monitor.histories['heading']) > 0 else 0:.2f}",
+                    f"Oscillation: {self.reward_manager.monitor.histories['oscillation_penalty'][-1] if len(self.reward_manager.monitor.histories['oscillation_penalty']) > 0 else 0:.2f}",
+                    f"Total: {self.reward_manager.monitor.histories['total_reward'][-1] if len(self.reward_manager.monitor.histories['total_reward']) > 0 else 0:.2f}"
                 ]
                 
-                for i, text in enumerate(reward_info):
-                    cv2.putText(img, text, (500, 30 + i * 30),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 1)
-            
-            # Show the image
-            cv2.imshow(f'Path Following Environment - {self.name}', img)
-            # cv2.waitKey(1500)
+                for i, text in enumerate(reward_text):
+                    cv2.putText(combined_img, text, 
+                               (img_width + 10, 30 + i * 25),  # Positioned on left side of right panel
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)  # Smaller font size
+
+            # Show the combined image
+            cv2.imshow(f'Path Following Environment - {self.name}', combined_img)
             cv2.waitKey(1)
-            
+        
         except Exception as e:
-            print(f"Render error: {e}")
+            print(f"Render error: {str(e)}")
+            import traceback
+            traceback.print_exc()
             
     def close(self):
         if not self.headless:

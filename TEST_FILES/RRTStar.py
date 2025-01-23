@@ -17,7 +17,7 @@ class Node:
     parent: Optional['Node'] = None
 
 class RRTStarPlanner:
-    def __init__(self, image_path, xlim=(-10, 10), ylim=(-7, 7), max_iter=rrt_config.max_iter, step_size=rrt_config.step_size, neighbor_radius=rrt_config.neighbor_radius):
+    def __init__(self, image_path, xlim=(-10, 10), ylim=(-8, 8), max_iter=rrt_config.max_iter, step_size=rrt_config.step_size, neighbor_radius=rrt_config.neighbor_radius):
         self.binary_map = self.convert_image_to_binary_map(image_path)
         self.xlim = xlim
         self.ylim = ylim

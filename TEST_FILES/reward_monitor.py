@@ -143,3 +143,9 @@ class RewardMonitor:
         for history in self.histories.values():
             history.clear()
         self.step_counter = 0
+
+    def get_data(self):
+        """Returns the total reward history data for visualization"""
+        if len(self.histories['total_reward']) > 0:
+            return list(self.histories['total_reward'])
+        return None
