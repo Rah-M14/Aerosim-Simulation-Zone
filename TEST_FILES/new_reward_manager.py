@@ -22,7 +22,7 @@ class RewardManager:
         self.ALPHA_PATH = 0.3
         
         # Progress Rews
-        self.PROGRESS_BASE = 20.0
+        self.PROGRESS_BASE = 10.0
         self.PATH_FOLLOW_BASE = 1.0
         self.HEADING_BASE = 10.0
         
@@ -48,15 +48,15 @@ class RewardManager:
         self.reward_history = []
         
     def compute_reward(self, current_pos: np.ndarray, prev_pos: np.ndarray, 
-                      goal_pos: np.ndarray, chunk: np.ndarray, world_theta: float) -> float:
+                      goal_pos: np.ndarray, chunk: np.ndarray, world_theta: float, timestep: int) -> float:
         reward = 0.0
         
-        goal_pot_rew, goal_pot = self.goal_pot_rew(current_pos, goal_pos)
+        goal_pot_rew, goal_pot = self.goal_pot_rew(current_pos, goal_pos, timestep)
         path_pot_rew, path_pot = self.path_pot_rew(current_pos, chunk)
         
-        progress_rew, progress = self.progress_rew(prev_pos, current_pos, chunk)
-        path_follow_rew = self.path_follow_rew(current_pos, progress, chunk)
-        heading_rew = self.heading_rew(current_pos, goal_pos, world_theta)
+        progress_rew, progress = self.progress_rew(prev_pos, current_pos, chunk, goal_pos, timestep)
+        path_follow_rew = self.path_follow_rew(current_pos, progress, chunk, timestep)
+        heading_rew = self.heading_rew(current_pos, goal_pos, world_theta, timestep)
                 
         oscillation_penalty = self.oscillation_penalty(current_pos)
 
@@ -87,13 +87,24 @@ class RewardManager:
         
         return reward, reward_components
     
-    def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
-        current_goal_potential = self._goal_potential(current_pos, goal_pos)        
+    # def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
+    #     current_goal_potential = self._goal_potential(current_pos, goal_pos)        
+    #     if self.prev_goal_potential is None:
+    #         self.prev_goal_potential = current_goal_potential
+
+    #     goal_shaping = self.GAMMA * self.prev_goal_potential - current_goal_potential
+    #     return self.ALPHA_GOAL * goal_shaping, -current_goal_potential
+
+    def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
+        current_goal_potential = self._goal_potential(current_pos, goal_pos)
         if self.prev_goal_potential is None:
             self.prev_goal_potential = current_goal_potential
+        diff = self.prev_goal_potential - current_goal_potential
 
-        goal_shaping = self.GAMMA * self.prev_goal_potential - current_goal_potential
-        return self.ALPHA_GOAL * goal_shaping, -current_goal_potential
+        if (timestep > 100 and diff <= 0):
+            return -current_goal_potential*(timestep/100), current_goal_potential
+        else:
+            return -current_goal_potential + diff, current_goal_potential
     
     def path_pot_rew(self, current_pos: np.ndarray, chunk: np.ndarray) -> float:
         current_path_potential = self._path_potential(current_pos, chunk)
@@ -103,13 +114,13 @@ class RewardManager:
         path_shaping = self.GAMMA * self.prev_path_potential - current_path_potential
         return self.ALPHA_PATH * path_shaping, -current_path_potential
     
-    def progress_rew(self, prev_pos: np.ndarray, current_pos: np.ndarray, chunk: np.ndarray) -> float:
-        progress = self._compute_progress(prev_pos, current_pos, chunk)
+    def progress_rew(self, prev_pos: np.ndarray, current_pos: np.ndarray, chunk: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
+        progress = self._compute_progress(prev_pos, current_pos, chunk, goal_pos)
         if progress > self.MIN_PROGRESS_THRESHOLD:
             return self.PROGRESS_BASE * progress, progress
-        return -1, 0.0
+        return -5 * (timestep/100), 0.0
     
-    def path_follow_rew(self, current_pos: np.ndarray, progress: float, chunk: np.ndarray) -> float:
+    def path_follow_rew(self, current_pos: np.ndarray, progress: float, chunk: np.ndarray, timestep: int) -> float:
         path_deviation = self._compute_path_deviation(current_pos, chunk)
         if path_deviation > self.MAX_DEVIATION_THRESHOLD:
             adaptive_scale = abs(self.MAX_DEVIATION_THRESHOLD - path_deviation)
@@ -117,14 +128,14 @@ class RewardManager:
             return path_follow_reward
         elif progress > self.MIN_PROGRESS_THRESHOLD:
             path_follow_reward = self.PATH_FOLLOW_BASE * np.exp((4/self.MAX_DEVIATION_THRESHOLD) * path_deviation)
-            return path_follow_reward
+            return path_follow_reward * (timestep/100)
         else:
             return 0.0
         
-    def heading_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, world_theta: float) -> float:
+    def heading_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, world_theta: float, timestep: int) -> float:
         desired_heading = self._compute_desired_heading(current_pos, goal_pos)
         heading_alignment = self._compute_heading_alignment(world_theta, desired_heading)
-        return self.HEADING_BASE * heading_alignment if heading_alignment < 0.0 else 0.0
+        return self.HEADING_BASE * heading_alignment * (timestep/100) if heading_alignment < 0.0 else 0.0
     
     def oscillation_penalty(self, current_pos: np.ndarray) -> float:
         if len(self.position_history) >= 3:
@@ -151,14 +162,21 @@ class RewardManager:
         return path_potential
     
     def _compute_progress(self, prev_pos: np.ndarray, current_pos: np.ndarray, 
-                         target_pos: np.ndarray) -> float:
+                         target_pos: np.ndarray, goal_pos: np.ndarray) -> float:
         prev_dist = {"0": np.linalg.norm(prev_pos - target_pos[0]),
                      "1": np.linalg.norm(prev_pos - target_pos[1])}
         current_dist = {"0": np.linalg.norm(current_pos - target_pos[0]),
                         "1": np.linalg.norm(current_pos - target_pos[1])}
+        goal_cur_dist = np.linalg.norm(goal_pos - current_pos)
+        goal_prev_dist = np.linalg.norm(goal_pos - prev_pos)
+        diff_g = goal_prev_dist - goal_cur_dist
+        
         prev_dist = min(prev_dist["0"], prev_dist["1"])
         current_dist = min(current_dist["0"], current_dist["1"])
-        return prev_dist - current_dist
+        diff_c = prev_dist - current_dist
+
+        progress = 0.35 * diff_c + 0.65 * diff_g
+        return progress
     
     def _compute_path_deviation(self, current_pos: np.ndarray, chunk: np.ndarray) -> float:
         if len(chunk) < 2:

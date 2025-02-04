@@ -104,6 +104,37 @@ def load_demonstrations(csv_file, env):
     
     return observations, actions
 
+def batch_action_to_pose(actions, current_poses, dt=1):
+    batch_size = actions.shape[0]
+    device = actions.device
+    
+    # Initialize poses tensor to store all 5 future poses
+    poses = torch.zeros((batch_size, 5, 2), device=device)
+    
+    # Initialize current position and orientation
+    x = current_poses[:, 0].clone()  # (batch_size,)
+    y = current_poses[:, 1].clone()  # (batch_size,)
+    theta = torch.zeros(batch_size, device=device)  # Initial orientation
+    
+    # Calculate poses for each timestep
+    for i in range(5):
+        linear = actions[:, i*2]      # Linear velocity for timestep i
+        angular = actions[:, i*2 + 1] # Angular velocity for timestep i
+        
+        # Update orientation
+        theta = theta + angular * np.pi
+        theta = ((theta + np.pi) % (2*np.pi)) - np.pi
+        
+        # Update position based on current orientation
+        x = x + linear * torch.cos(theta)
+        y = y + linear * torch.sin(theta)
+        
+        # Store the new pose
+        poses[:, i, 0] = x
+        poses[:, i, 1] = y
+    
+    return poses
+
 def pretrain_policy(
     env,
     policy,
@@ -111,11 +142,11 @@ def pretrain_policy(
     device="cuda",
     batch_size=256,
     epochs=20,
-    learning_rate=3e-4,
+    learning_rate=5e-3,
     val_split=0.1,
-    early_stopping_patience=10000,
+    early_stopping_patience=20,
 ):
-    """Pretrain policy using behavioral cloning with prediction of future actions"""
+    """Pretrain policy using behavioral cloning with prediction of future actions and poses"""
     observations, actions = expert_data
     
     # Split data into train and validation sets
@@ -123,9 +154,11 @@ def pretrain_policy(
     train_dataset = ExpertDataset(observations[:split_idx], actions[:split_idx])
     val_dataset = ExpertDataset(observations[split_idx:], actions[split_idx:])
 
-    # Weights for different timesteps (current and future)
+    # Weights for different timesteps and loss components
     time_weights = [1.0, 0.8, 0.6, 0.4, 0.2]  # Decreasing weights for future predictions
     alpha = 0.4  # Weight between linear and angular losses
+    beta = 0.3   # Weight between action and pose losses
+    dt = 1     # Time step for pose calculation
     
     train_loader = DataLoader(
         train_dataset,
@@ -151,13 +184,21 @@ def pretrain_policy(
         optimizer, T_0=10, T_mult=2, eta_min=1e-6
     )
     
-    criterion = nn.MSELoss(reduction='none')  # Use reduction='none' to apply weights
+    criterion = nn.MSELoss(reduction='none')
     best_val_loss = float('inf')
     patience_counter = 0
+
+    # torch.save({
+    #             # 'epoch': epoch,
+    #             'model_state_dict': policy.state_dict(),
+    #             'optimizer_state_dict': optimizer.state_dict(),
+    #             'loss': best_val_loss,
+    #         }, "best_bc_policy.pth")
     
     policy = policy.to(device)
-    policy = torch.compile(policy)
-    
+    # Comment out or remove the torch.compile line
+    # policy = torch.compile(policy)  # Remove this line
+
     for epoch in range(epochs):
         # Training phase
         policy.train()
@@ -170,32 +211,44 @@ def pretrain_policy(
             
             optimizer.zero_grad(set_to_none=True)
             
-            # Mixed precision training
             with torch.amp.autocast(device_type='cuda'):
-                # Predict all 5 actions (current + 4 future)
-                pred_actions = policy(batch_obs)  # Shape: [batch_size, 10] (5 pairs of actions)
+                pred_actions = policy(batch_obs)
+                
+                # Get current poses from observations
+                current_poses = torch.stack([
+                    batch_obs[:, 0],  # current_x
+                    batch_obs[:, 1],  # current_y
+                ], dim=1)
+                
+                # Calculate predicted and target pose sequences
+                pred_poses = batch_action_to_pose(pred_actions, current_poses)
+                target_poses = batch_action_to_pose(batch_actions, current_poses)
                 
                 total_loss = 0
-                for i in range(5):  # For current and 4 future predictions
-                    # Get the corresponding pair of actions
-                    pred_linear = pred_actions[:, i*2]
-                    pred_angular = pred_actions[:, i*2 + 1]
-                    target_linear = batch_actions[:, i*2]
-                    target_angular = batch_actions[:, i*2 + 1]
+                for i in range(5):
+                    # Action-based loss for this timestep
+                    pred_step_actions = pred_actions[:, i*2:(i+1)*2]
+                    target_step_actions = batch_actions[:, i*2:(i+1)*2]
                     
-                    # Calculate losses for this timestep
-                    loss_l = criterion(pred_linear, target_linear).mean()
-                    loss_theta = criterion(pred_angular, target_angular).mean()
+                    loss_actions = criterion(pred_step_actions, target_step_actions)
+                    loss_l = loss_actions[:, 0].mean()  # linear velocity loss
+                    loss_theta = loss_actions[:, 1].mean()  # angular velocity loss
+                    action_loss = alpha * loss_l + (1-alpha) * loss_theta
                     
-                    # Combine losses with alpha weight and time weight
-                    timestep_loss = time_weights[i] * (alpha * loss_l + (1-alpha) * loss_theta)
+                    # Pose-based loss for this timestep
+                    pose_loss = criterion(pred_poses[:, i], target_poses[:, i]).mean()
+                    
+                    # Combine losses with weights
+                    timestep_loss = time_weights[i] * (beta * action_loss + (1-beta) * pose_loss)
                     total_loss += timestep_loss
                     
-                    # Log individual timestep losses
                     wandb.log({
-                        f"bc_train/t{i}_linear_loss": loss_l.item(),
-                        f"bc_train/t{i}_angular_loss": np.rad2deg(loss_theta.item()*np.pi),
-                        f"bc_train/t{i}_total_loss": timestep_loss.item()
+                        f"bc_train/t{i}_action_loss": action_loss.item(),
+                        f"bc_train/t{i}_pose_loss": pose_loss.item(),
+                        f"bc_train/t{i}_total_loss": timestep_loss.item(),
+                        f"bc_train/t{i}_action_loss_l": loss_l.item(),
+                        f"bc_train/t{i}_action_loss_theta": np.rad2deg(loss_theta.item()),
+                        f"bc_train/epoch": epoch
                     })
 
             scaler.scale(total_loss).backward()
@@ -205,10 +258,11 @@ def pretrain_policy(
             scaler.update()
             
             train_loss += total_loss.item()
-            train_pbar.set_postfix({'loss': f'{total_loss.item():.6f}'})
+            c_loss = total_loss.item()
+            train_pbar.set_postfix({'loss': f'{c_loss:.6f}'})
             
             wandb.log({
-                "bc_train/total_loss": total_loss.item(),
+                "bc_train/total_loss": c_loss,
                 "bc_train/learning_rate": optimizer.param_groups[0]['lr']
             })
 
@@ -218,36 +272,63 @@ def pretrain_policy(
         policy.eval()
         val_loss = 0
         val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]")
-        
-        with torch.no_grad():
-            for batch_obs, batch_actions in val_pbar:
-                batch_obs = batch_obs.to(device, non_blocking=True)
-                batch_actions = batch_actions.to(device, non_blocking=True)
-                
+
+        for batch_obs, batch_actions in val_pbar:
+            batch_obs = batch_obs.to(device, non_blocking=True)
+            batch_actions = batch_actions.to(device, non_blocking=True)
+            
+            optimizer.zero_grad(set_to_none=True)
+            
+            with torch.amp.autocast(device_type='cuda'):
                 pred_actions = policy(batch_obs)
+                
+                # Get current poses from observations
+                current_poses = torch.stack([
+                    batch_obs[:, 0],  # current_x
+                    batch_obs[:, 1],  # current_y
+                ], dim=1)
+                
+                # Calculate predicted and target pose sequences
+                pred_poses = batch_action_to_pose(pred_actions, current_poses)
+                target_poses = batch_action_to_pose(batch_actions, current_poses)
                 
                 total_loss = 0
                 for i in range(5):
-                    pred_linear = pred_actions[:, i*2]
-                    pred_angular = pred_actions[:, i*2 + 1]
-                    target_linear = batch_actions[:, i*2]
-                    target_angular = batch_actions[:, i*2 + 1]
+                    # Action-based loss for this timestep
+                    pred_step_actions = pred_actions[:, i*2:(i+1)*2]
+                    target_step_actions = batch_actions[:, i*2:(i+1)*2]
                     
-                    loss_l = criterion(pred_linear, target_linear).mean()
-                    loss_theta = criterion(pred_angular, target_angular).mean()
-                    timestep_loss = time_weights[i] * (alpha * loss_l + (1-alpha) * loss_theta)
+                    loss_actions = criterion(pred_step_actions, target_step_actions)
+                    loss_l = loss_actions[:, 0].mean()  # linear velocity loss
+                    loss_theta = loss_actions[:, 1].mean()  # angular velocity loss
+                    action_loss = alpha * loss_l + (1-alpha) * loss_theta
+                    
+                    # Pose-based loss for this timestep
+                    pose_loss = criterion(pred_poses[:, i], target_poses[:, i]).mean()
+                    
+                    # Combine losses with weights
+                    timestep_loss = time_weights[i] * (beta * action_loss + (1-beta) * pose_loss)
                     total_loss += timestep_loss
+                    
+                    wandb.log({
+                        f"bc_val/t{i}_action_loss": action_loss.item(),
+                        f"bc_val/t{i}_pose_loss": pose_loss.item(),
+                        f"bc_val/t{i}_total_loss": timestep_loss.item(),
+                        f"bc_val/t{i}_action_loss_l": loss_l.item(),
+                        f"bc_val/t{i}_action_loss_theta": np.rad2deg(loss_theta.item()),
+                        f"bc_val/epoch": epoch
+                    })
 
-                val_loss += total_loss.item()
-                val_pbar.set_postfix({'loss': f'{total_loss.item():.6f}'})
+                v_loss = total_loss.item()
+                val_pbar.set_postfix({'loss': f'{v_loss:.6f}'})
 
         avg_train_loss = train_loss / len(train_loader)
-        avg_val_loss = val_loss / len(val_loader)
+        avg_val_loss = v_loss / len(val_loader)
         
         wandb.log({
             "bc_val/loss": avg_val_loss,
             "bc_train/avg_loss": avg_train_loss,
-            "bc_train/epoch": epoch
+            "bc_val/epoch": epoch
         })
 
         # Early stopping
@@ -281,7 +362,7 @@ def main(args):
     
     # Create environment
     env = PathFollowingEnv(
-        image_path="/home/rahm/.local/share/ov/pkg/isaac-sim-4.2.0/standalone_examples/api/omni.isaac.kit/TEST_FILES/New_WR_World.png",
+        image_path=r"TEST_FILES\New_WR_World.png",
         algo_run=algo,
         max_episode_steps=1000,
         headless=True,
@@ -297,8 +378,8 @@ def main(args):
 
     policy_kwargs = {
                 "net_arch": dict(
-                    pi=[64, 64, 64, 64, 64, 64, 64, 64],
-                    qf=[64, 64, 64, 64, 64, 64, 64, 64]
+                    pi=[16, 32, 64, 32, 16],
+                    qf=[16, 32, 64, 32, 16]
                 ),
                 "optimizer_class": optim.AdamW,
                 "optimizer_kwargs": dict(weight_decay=1e-5)
@@ -366,15 +447,18 @@ def main(args):
                 device=device,
                 verbose=1
             ).policy
+        
+    for key in policy.state_dict():
+        print(key)
 
     # Pretrain the policy
     pretrained_policy = pretrain_policy(
         env=env,
         policy=policy,
         expert_data=expert_data,
-        batch_size=512,
-        epochs=10000,
-        learning_rate=3e-4,
+        batch_size=2048,
+        epochs=1,
+        learning_rate=1e-3,
         device=device
     )
     
@@ -382,7 +466,7 @@ def main(args):
     torch.save({
         'model_state_dict': pretrained_policy.state_dict(),
         # 'final_loss': best_val_loss,
-    }, "TD3_Pretrained.pth")
+    }, "Mod_PPO_Pretrained.pth")
     
     wandb.finish()
 

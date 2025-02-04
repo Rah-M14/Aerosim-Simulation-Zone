@@ -67,14 +67,16 @@ class CkptAutoRemovalCallback(BaseCallback):
             os.remove(os.path.join(self.model_dir, ckpt))
         return True
 
-def make_env(algo, enable_reward_monitor: bool = False, enable_wandb: bool = False):
+def make_env(algo, enable_reward_monitor: bool = False, enable_wandb: bool = False, render_type: str = "normal"):
     env = PathFollowingEnv(
-        image_path="standalone_examples/api/omni.isaac.kit/TEST_FILES/New_WR_World.png",
+        image_path=r"TEST_FILES\New_WR_World.png",
         algo_run=algo,
         max_episode_steps=obs_config.max_episode_steps,
         chunk_size=obs_config.chunk_size,
+        headless=False,
         enable_reward_monitor=enable_reward_monitor,
-        enable_wandb=enable_wandb
+        enable_wandb=enable_wandb, 
+        render_type=render_type
     )
     return env
 
@@ -100,7 +102,7 @@ def main(args):
     algorithm = args.algo.upper()
     given_ckpt = args.ckpt_path
     
-    base_dir = "/home/rahm/SIMPLE_LOGS"
+    base_dir = r"logs"
     run_id = get_next_run_folder(os.path.join(base_dir, "logs", algorithm))
     name = f"{algorithm}_{run_id}"
     
@@ -131,21 +133,21 @@ def main(args):
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log)
+    env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log, render_type=args.render_type)
     env = Monitor(env, log_dir)
     env = DummyVecEnv([lambda: env])
     env = VecNormalize(env, norm_obs=True, norm_reward=True)
 
     # Create evaluation environment
-    eval_env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log)
+    eval_env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log, render_type=args.render_type)
     eval_env = Monitor(eval_env, log_dir)
     eval_env = DummyVecEnv([lambda: eval_env])
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True)
 
     policy_kwargs = dict(
         net_arch=dict(
-            pi=[32, 64, 128, 128, 128, 128, 128],
-            qf=[32, 64, 128, 128, 128, 128, 128]
+            pi=[16, 32, 64, 32, 16],
+            qf=[16, 32, 64, 32, 16]
         )
     )
 
@@ -210,7 +212,7 @@ def main(args):
                 gamma=0.99,
                 gae_lambda=0.95,
                 clip_range=0.2,
-                ent_coef=0.01,
+                ent_coef=0.0001,
                 vf_coef=0.5,
                 max_grad_norm=0.5,
                 normalize_advantage=True,
@@ -244,9 +246,61 @@ def main(args):
                 verbose=1
             )
 
+    original_action_net = model.policy.action_net
+    model.policy.action_net = nn.Sequential(
+        original_action_net,
+        nn.Tanh()
+    )
+        
+    # Print complete model architecture
+    print("\n=== Complete Model Architecture ===")
+    print("\n1. Policy Network (Actor):")
+    print(f"Input Shape: {env.observation_space.shape}")
+    print("\nMLP Extractor Policy Network:")
+    for name, module in model.policy.mlp_extractor.policy_net.named_children():
+        print(f"  {name}: {module}")
+    
+    print("\nAction Network (Final layer):")
+    print(f"  Action Net: {model.policy.action_net}")
+    print(f"Output Shape: {env.action_space.shape}")
+
+    print("\n2. Value Network (Critic):")
+    print("\nMLP Extractor Value Network:")
+    for name, module in model.policy.mlp_extractor.value_net.named_children():
+        print(f"  {name}: {module}")
+    
+    print("\nValue Network (Final layer):")
+    print(f"  Value Net: {model.policy.value_net}")
+    
+    # Print parameter counts
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    print("\n=== Parameter Counts ===")
+    print(f"Total Trainable Parameters: {count_parameters(model.policy):,}")
+    print(f"Policy Network Parameters: {count_parameters(model.policy.mlp_extractor.policy_net) + count_parameters(model.policy.action_net):,}")
+    print(f"Value Network Parameters: {count_parameters(model.policy.mlp_extractor.value_net) + count_parameters(model.policy.value_net):,}")
+
+    # model_till_last = nn.Sequential(*list(model.policy.mlp_extractor.policy_net.children()))
+    # print("\nModel architecture till last layer:")
+    # for idx, layer in enumerate(model_till_last):
+    #     print(f"Layer {idx}: {layer}")
+
     if args.policy:
         pretrained_policy = torch.load(args.policy)
         pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
+        print("Model Policy:")
+        for key,_ in model.policy.state_dict().items():
+            print(key)
+        print("\n")
+
+        print("Loaded Policy:")
+        for key in pretrained_policy['model_state_dict']:
+            print(key)
+        print("\n")
+
+        pretrained_policy['model_state_dict']['value_net.weight'] = model.policy.value_net.weight
+        pretrained_policy['model_state_dict']['value_net.bias'] = model.policy.value_net.bias
         model.policy.load_state_dict(pretrained_policy['model_state_dict'])
 
     total_timesteps = 1000000000
@@ -299,6 +353,7 @@ def evaluate_model(args, num_episodes=100):
 
     algo = args.algo.upper()
     model_path = args.ckpt_path
+    policy_path = args.policy
 
     wandb.init(
         project="path-following-eval",
@@ -312,9 +367,10 @@ def evaluate_model(args, num_episodes=100):
 
     policy_kwargs = {
                 "net_arch": dict(
-                    pi=[64, 64, 64, 64, 64, 64, 64, 64],
-                    qf=[64, 64, 64, 64, 64, 64, 64, 64]
+                    pi=[16, 32, 64, 32, 16],
+                    qf=[16, 32, 64, 32, 16]
                 ),
+                "activation_fn": nn.ReLU
                 # "optimizer_class": optim.AdamW,
                 # "optimizer_kwargs": dict(weight_decay=1e-5)
             }
@@ -385,10 +441,62 @@ def evaluate_model(args, num_episodes=100):
             # optimize_memory_usage=True,
             verbose=1
             )
+        
+    original_action_net = model.policy.action_net
+    model.policy.action_net = nn.Sequential(
+        original_action_net,
+        nn.Tanh()
+    )
+        
+    # Print complete model architecture
+    print("\n=== Complete Model Architecture ===")
+    print("\n1. Policy Network (Actor):")
+    print(f"Input Shape: {env.observation_space.shape}")
+    print("\nMLP Extractor Policy Network:")
+    for name, module in model.policy.mlp_extractor.policy_net.named_children():
+        print(f"  {name}: {module}")
+    
+    print("\nAction Network (Final layer):")
+    print(f"  Action Net: {model.policy.action_net}")
+    print(f"Output Shape: {env.action_space.shape}")
+
+    print("\n2. Value Network (Critic):")
+    print("\nMLP Extractor Value Network:")
+    for name, module in model.policy.mlp_extractor.value_net.named_children():
+        print(f"  {name}: {module}")
+    
+    print("\nValue Network (Final layer):")
+    print(f"  Value Net: {model.policy.value_net}")
+    
+    # Print parameter counts
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    print("\n=== Parameter Counts ===")
+    print(f"Total Trainable Parameters: {count_parameters(model.policy):,}")
+    print(f"Policy Network Parameters: {count_parameters(model.policy.mlp_extractor.policy_net) + count_parameters(model.policy.action_net):,}")
+    print(f"Value Network Parameters: {count_parameters(model.policy.mlp_extractor.value_net) + count_parameters(model.policy.value_net):,}")
+
+    # model_till_last = nn.Sequential(*list(model.policy.mlp_extractor.policy_net.children()))
+    # print("\nModel architecture till last layer:")
+    # for idx, layer in enumerate(model_till_last):
+    #     print(f"Layer {idx}: {layer}")
 
     if args.policy:
         pretrained_policy = torch.load(args.policy)
         pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
+        print("Model Policy:")
+        for key,_ in model.policy.state_dict().items():
+            print(key)
+        print("\n")
+
+        print("Loaded Policy:")
+        for key in pretrained_policy['model_state_dict']:
+            print(key)
+        print("\n")
+
+        pretrained_policy['model_state_dict']['value_net.weight'] = model.policy.value_net.weight
+        pretrained_policy['model_state_dict']['value_net.bias'] = model.policy.value_net.bias
         model.policy.load_state_dict(pretrained_policy['model_state_dict'])
 
     rewards = []
@@ -400,8 +508,10 @@ def evaluate_model(args, num_episodes=100):
             episode_reward = 0
             
             while not done:
-                action, _ = model.predict(obs, deterministic=True)
+                action, val = model.predict(obs, deterministic=True)
+                print(f"Observations: {obs}")
                 print(f"Action: {action}")
+                print(f"Value: {val}")
                 obs, reward, done, info = env.step(action)
                 episode_reward += reward[0]
                 
@@ -439,6 +549,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--evaluate", action="store_true", help="Evaluate the trained model")
     parser.add_argument("--wandb_log", action="store_true", help="Enable WandB logging")
+    parser.add_argument("--render_type", type=str, default="normal", choices=["normal", "dual"], help="Render jsut on black bg (normal) or with the image (dual)")
     parser.add_argument("--policy", type=str, help="Pretrained base policy")
     parser.add_argument("--resume", type=str, default=None, choices=["latest", "best"], help="Resume the checkpoint")
     parser.add_argument("--algo", type=str, default="sac", choices=["ppo", "sac", "td3"], help="Algorithm to use")
