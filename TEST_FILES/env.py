@@ -205,7 +205,7 @@ class PathFollowingEnv(gym.Env):
         )
         # print(self.lidar_points.shape)
 
-        proposed_action = self.adjust_actions(lidar_dists, action, 30)
+        proposed_action = self.adjust_actions(lidar_dists, action, self.agent_theta, 2, debug=True)
         print(f"Action change: {action} -> {proposed_action}")
 
         new_pos = self.action_to_pos(proposed_action)
@@ -572,7 +572,7 @@ class PathFollowingEnv(gym.Env):
 
                 # Show the combined image
                 cv2.imshow(f'Path Following Environment - {self.name}', combined_img)
-                cv2.waitKey(1)
+                cv2.waitKey(1000)
             
             except Exception as e:
                 print(f"Render error: {str(e)}")
@@ -796,35 +796,38 @@ class PathFollowingEnv(gym.Env):
         # return np.array([0.0, 0.0])
         return new_pos
 
-    def adjust_actions(self, lidar_points, proposed_action, n, debug=False):
+    def adjust_actions(self, lidar_points, proposed_action, world_theta, n, debug=False):
         """
         Adjust the proposed (L, θ) action to avoid collisions and move into the closest free space.
-        
+
         This function takes the LiDAR scan data (batch, 360) and a proposed action (batch, 2) provided
         in normalized units (both values between -1 and 1). The linear component (L) is interpreted as 
-        L * max_step_size, and the angular component (θ) as θ * max_theta (in radians), where we assume:
-            max_step_size = 1.0  (agent's maximum displacement per step)
-            max_theta = π       (so that a normalized value of ±1 corresponds to ±π radians)
+        L * max_step_size, and the angular component (θ) is computed as follows:
         
-        For each sample in the batch, the function examines the LiDAR readings in a safety window of ±n 
-        degrees around the current proposed angle (converted to degrees) to determine if the proposed 
-        linear displacement would lead to a collision (i.e. if an obstacle is closer than the intended move).
+           1. Convert the robot's current world orientation (world_theta, given in degrees) to radians.
+           2. Compute an angular offset by scaling the normalized proposed angular value by π (i.e. ±π radians).
+           3. Compute the desired heading as:
+                  desired_heading (radians) = world_theta (in radians) + (proposed_action[θ] * π)
+           4. Convert the desired heading to degrees (in the 0-359 range) for performing LiDAR safety checks.
         
-        If a collision is predicted, the function searches over candidate angles (in a broader range, e.g. ±30°)
-        for the direction closest to the original that is free (i.e. whose window has a higher obstacle distance).
-        It then sets the new linear action to be the minimum of the original and (the candidate's safe distance 
-        multiplied by a margin) and returns the adjusted action in normalized units.
-        
+        If a collision is predicted (using a safety window of ±n deg), the function searches for an alternative,
+        and may reduce the linear component if necessary. Finally, the new angular value is converted back
+        to a normalized value in [-1,1] (by dividing the found angular displacement (in radians) by π).
+
         Args:
             lidar_points (np.ndarray): Array of shape (batch, 360) with LiDAR distances.
-            proposed_action (np.ndarray): Array of shape (batch,2) with normalized action values in [-1,1]
+            proposed_action (np.ndarray): Array of shape (batch, 2) with normalized action values in [-1,1]
                                           for [linear, angular] displacement.
+            world_theta (float): The current world orientation of the robot in degrees.
             n (int): Safety margin in degrees for collision checking (±n).
             debug (bool): If True, prints debug statements.
-        
+
         Returns:
             np.ndarray: Adjusted action of shape (batch, 2) with normalized values in [-1,1].
         """
+        if debug:
+            print(f"DEBUG: Initial proposed_action: {proposed_action}")
+
         # If the proposed_action is 1-dimensional, expand its dimensions.
         was_single_action = False
         if proposed_action.ndim == 1:
@@ -833,78 +836,128 @@ class PathFollowingEnv(gym.Env):
 
         # Environment constants.
         max_step_size = 1.0  # Actual maximum displacement (units)
-        max_theta = np.pi    # Maximum angular change in radians (normalized value ±1)
-        
-        batch_size = proposed_action.shape[0]
-        new_action = proposed_action.copy()
-        
-        # Convert normalized actions to actual environment values.
-        # Actual linear displacement (taking absolute value to assess distance).
-        actual_L = np.abs(proposed_action[:, 0]) * max_step_size  
-        # Actual angular displacement in radians.
-        actual_theta_rad = proposed_action[:, 1] * max_theta  
-        # Convert angle to degrees (0-360).
-        actual_theta_deg = (np.rad2deg(actual_theta_rad)) % 360
+        max_theta = np.pi    # Maximum angular change in radians (i.e. normalized ±1 -> ±π)
 
-        lidar_points = lidar_points[np.newaxis, :]
-        
-        # Loop over each sample (usually batch size is 1).
+        batch_size = proposed_action.shape[0]
+        new_action = np.zeros((batch_size, 2))  # initialize the output array
+
+        # Convert the normalized linear action to actual displacement.
+        actual_L = np.abs(proposed_action[:, 0]) * max_step_size
+        if debug:
+            print(f"DEBUG: Computed actual_L: {actual_L}")
+
+        # Convert world_theta (in degrees) to radians.
+        world_theta_rad = np.deg2rad(world_theta)
+        # Compute the angular offset (in radians) from the normalized proposed action.
+        action_theta_offset_rad = proposed_action[:, 1] * max_theta
+
+        if proposed_action[:, 0] < 0:
+            action_theta_offset_rad = action_theta_offset_rad - np.pi
+
+        # Desired new heading in radians.
+        desired_heading_rad = world_theta_rad + action_theta_offset_rad
+        # Convert desired heading to degrees within 0-359.
+        actual_theta_deg = np.rad2deg(desired_heading_rad) % 360
+        if debug:
+            print(f"DEBUG: Computed desired_heading (deg): {actual_theta_deg}")
+
+        # Expand lidar_points to include batch dimension if needed.
+        if lidar_points.ndim == 1:
+            lidar_points = lidar_points[np.newaxis, :]
+        if debug:
+            print(f"DEBUG: lidar_points shape after potential expansion: {lidar_points.shape}")
+
+        # Loop over each sample.
         for i in range(batch_size):
-            # Define a narrow safety window ±n degrees around the proposed angle.
+            if debug:
+                print(f"DEBUG: Processing sample {i}")
+            # Define a narrow safety window ±n degrees.
             window_offsets = np.arange(-n, n + 1)
-            proposal_angle = np.round(actual_theta_deg[i]).astype(int)  # integer version of proposed angle.
+            if debug:
+                print(f"DEBUG: window_offsets: {window_offsets}")
+
+            # Round the intended heading (in degrees) to an integer.
+            proposal_angle = np.round(actual_theta_deg[i]).astype(int)
+            if debug:
+                print(f"DEBUG: Sample {i} proposal_angle: {proposal_angle}")
+
             indices = (proposal_angle + window_offsets) % 360
+            if debug:
+                print(f"DEBUG: Sample {i} safety window indices: {indices}")
+
             readings = lidar_points[i, indices]
-            
-            # The proposed action would be unsafe if any reading in the safety window
-            # is less than or equal to the intended displacement.
-            if (readings <= actual_L[i]).any():
+            if debug:
+                print(f"DEBUG: Sample {i} LiDAR readings in safety window: {readings}")
+
+            # If any reading in the window is <= 1.5 * max_step_size, the action is unsafe.
+            if (readings <= max_step_size * 1.5).any():
                 if debug:
-                    print(f"Sample {i}: Proposed action unsafe. Safety window readings: {readings}, Proposed L: {actual_L[i]}")
-                # Search for candidate angles in a broader range (e.g. ±30°) to find a free path.
+                    print(f"DEBUG: Sample {i}: Proposed action is unsafe.")
                 candidate_range = np.arange(-n, n+1)
                 candidate_angles = (proposal_angle + candidate_range) % 360
+                if debug:
+                    print(f"DEBUG: Sample {i}: candidate_range: {candidate_range}")
+                    print(f"DEBUG: Sample {i}: candidate_angles: {candidate_angles}")
                 best_candidate = None
                 best_diff = 360  # Initialize with maximum possible angular difference.
                 candidate_safe_distance = 0
-                
-                # For each candidate, evaluate its safety using a narrow window (±n).
+
+                # Evaluate candidate angles within the safety window.
                 for cand in candidate_angles:
                     cand_indices = (cand + window_offsets) % 360
                     cand_readings = lidar_points[i, cand_indices]
-                    # The safe distance is the smallest reading (i.e. the first obstacle encountered)
-                    # in the candidate's window.
                     cand_safe_dist = np.min(cand_readings)
                     diff_angle = min(abs(cand - actual_theta_deg[i]), 360 - abs(cand - actual_theta_deg[i]))
-                    # Choose candidate if it has some free space and is closer in angle to the original.
-                    if cand_safe_dist > 0 and diff_angle < best_diff:
+                    if debug:
+                        print(f"DEBUG: Sample {i}: Evaluating candidate angle {cand}:")
+                        print(f"       cand_indices: {cand_indices}")
+                        print(f"       cand_readings: {cand_readings}")
+                        print(f"       cand_safe_dist: {cand_safe_dist}, diff_angle: {diff_angle}")
+                    # Choose candidate if it has enough free space and is closer in angle to the original.
+                    if (cand_safe_dist > 0 and cand_safe_dist >= (max_step_size - 1e-2)) and diff_angle < best_diff:
                         best_diff = diff_angle
                         best_candidate = cand
                         candidate_safe_distance = cand_safe_dist
-                
-                # If no candidate is found, fallback by reducing the linear displacement.
+                        if debug:
+                            print(f"DEBUG: Sample {i}: New best candidate found: {cand} with diff {best_diff} and safe distance {cand_safe_dist}")
+
+                # If no candidate was found, reduce the linear displacement.
                 if best_candidate is None:
                     new_actual_L = actual_L[i] * 0.5
                     new_actual_theta_deg = actual_theta_deg[i]
                     if debug:
-                        print(f"Sample {i}: No free candidate found; halving L to {new_actual_L}.")
+                        print(f"DEBUG: Sample {i}: No free candidate found; halving L to {new_actual_L}.")
                 else:
                     new_actual_theta_deg = best_candidate
-                    margin = 0.9  # Safety margin: do not use the full available free distance.
+                    margin = 0.9  # Use a safety margin.
                     new_actual_L = min(actual_L[i], candidate_safe_distance * margin)
                     if debug:
-                        print(f"Sample {i}: Candidate angle {best_candidate}° selected with safe distance {candidate_safe_distance}.")
-                        print(f"Sample {i}: New L set to {new_actual_L}.")
-                
-                # Update the action in normalized units.
+                        print(f"DEBUG: Sample {i}: Candidate angle {best_candidate}° selected with safe distance {candidate_safe_distance}.")
+                        print(f"DEBUG: Sample {i}: New linear displacement set to {new_actual_L}.")
+
+                # Normalize the adjusted linear and angular actions.
                 new_action[i, 0] = np.clip(new_actual_L / max_step_size, -1, 1)
                 new_theta_rad = np.deg2rad(new_actual_theta_deg)
                 new_action[i, 1] = np.clip(new_theta_rad / max_theta, -1, 1)
-            else:
                 if debug:
-                    print(f"Sample {i}: Proposed action is safe.")
-        
-        # If the input was a single action (1D), return a 1D array.
+                    print(f"DEBUG: Sample {i}: Updated action: linear = {new_action[i, 0]}, angular (normalized) = {new_action[i, 1]}")
+            elif (readings <= max_step_size * 3).any():
+                new_action[i, 0] = actual_L[i] / 2
+                if debug:
+                    print(f"DEBUG: Sample {i}: Proposed action is safe but L is halved to {new_action[i, 0]}")
+            else:
+                # If no adjustments are needed, pass the proposed normalized action.
+                new_action[i, 0] = proposed_action[i, 0]
+                new_action[i, 1] = proposed_action[i, 1]
+                if debug:
+                    print(f"DEBUG: Sample {i}: Proposed action is safe, no adjustments made.")
+
         if was_single_action:
+            if debug:
+                print(f"DEBUG: Returning single action: {new_action[0]}")
             return new_action[0]
+
+        if debug:
+            print(f"DEBUG: Returning batch of actions: {new_action}")
+            print("DEBUG: Exiting adjust_actions")
         return new_action
