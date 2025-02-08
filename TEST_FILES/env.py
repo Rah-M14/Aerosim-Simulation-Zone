@@ -13,8 +13,8 @@ import os
 import cv2
 from PIL import Image
 
-# from LiDAR import get_lidar_points
-from LiDAR_batch import get_lidar_points
+from LiDAR import get_lidar_points
+# from LiDAR_batch import get_lidar_points
 
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
@@ -196,7 +196,7 @@ class PathFollowingEnv(gym.Env):
         self.global_step += 1
         self.episode_length += 1
 
-        self.lidar_points, rel_points, lidar_dists = get_lidar_points(
+        self.lidar_points, lidar_dists = get_lidar_points(
             self.binary_img,
             self.current_pos,
             self.env_world_limits,
@@ -289,15 +289,13 @@ class PathFollowingEnv(gym.Env):
         if self.wandb_enabled:
             wandb.log(reward_components)
 
-        # Get LiDAR points after updating position
-        # self.lidar_points = get_lidar_points(
-        #     self.binary_img,
-        #     self.current_pos,
-        #     self.env_world_limits,
-        #     num_rays=360,
-        #     max_range=4.0
-        # )
-        # print(self.lidar_points.shape)
+        self.lidar_points, lidar_dists = get_lidar_points(
+            self.binary_img,
+            self.current_pos,
+            self.env_world_limits,
+            num_rays=360,
+            max_range=4.0
+        )
 
         if not self.headless:
             self.render()
@@ -386,17 +384,17 @@ class PathFollowingEnv(gym.Env):
                     x_range = self.env_world_limits[0][1] - self.env_world_limits[0][0]
                     y_range = self.env_world_limits[1][1] - self.env_world_limits[1][0]
                     
-                    img_x = int((x - self.env_world_limits[0][0]) * (img_width / x_range))
-                    img_y = int((self.env_world_limits[1][1] - y) * (img_height / y_range))
+                    img_x = int(round((x - self.env_world_limits[0][0]) * (img_width / x_range)))
+                    img_y = int(round((self.env_world_limits[1][1] - y) * (img_height / y_range)))
                     return img_x, img_y
 
                 def world_to_img_right(x, y):
-                    # Transform from world coordinates to image coordinates using env limits
+                    # Transform from world coordinates to image coordinates using env limits (for the right panel)
                     x_range = self.env_world_limits[0][1] - self.env_world_limits[0][0]
                     y_range = self.env_world_limits[1][1] - self.env_world_limits[1][0]
                     
-                    img_x = int((x - self.env_world_limits[0][0]) * (img_width / x_range)) + img_width + gap_size
-                    img_y = int((self.env_world_limits[1][1] - y) * (img_height / y_range))
+                    img_x = int(round((x - self.env_world_limits[0][0]) * (img_width / x_range))) + img_width + gap_size
+                    img_y = int(round((self.env_world_limits[1][1] - y) * (img_height / y_range)))
                     return img_x, img_y
 
                 # Draw grid on right panel using env_world_limits
@@ -519,24 +517,24 @@ class PathFollowingEnv(gym.Env):
                     cv2.circle(combined_img, goal_pos, 10, (0, 255, 0), -1)  # Green circle
 
                 # Draw LiDAR points on both panels
-                # if self.lidar_points is not None and len(self.lidar_points) > 0:
-                #     # Draw rays and points
-                #     for point in self.lidar_points:
-                #         # Convert LiDAR points to world coordinates
-                #         world_x = self.current_pos[0] + point[0]
-                #         world_y = self.current_pos[1] + point[1]
+                if self.lidar_points is not None and len(self.lidar_points) > 0:
+                    # Draw rays and points
+                    for point in self.lidar_points:
+                        # Convert LiDAR points to world coordinates
+                        world_x = self.current_pos[0] + point[0]
+                        world_y = self.current_pos[1] + point[1]
                         
-                #         # Draw on left panel
-                #         left_x, left_y = world_to_img_left(world_x, world_y)
-                #         robot_left = world_to_img_left(self.current_pos[0], self.current_pos[1])
-                #         # cv2.line(combined_img, robot_left, (left_x, left_y), (0, 0, 255), 1)  # Red ray
-                #         cv2.circle(combined_img, (left_x, left_y), 2, (255, 0, 0), -1)  # Blue dot
+                        # Draw on left panel
+                        left_x, left_y = world_to_img_left(world_x, world_y)
+                        robot_left = world_to_img_left(self.current_pos[0], self.current_pos[1])
+                        # cv2.line(combined_img, robot_left, (left_x, left_y), (0, 0, 255), 1)  # Red ray
+                        cv2.circle(combined_img, (left_x, left_y), 2, (255, 0, 0), -1)  # Blue dot
                         
-                #         # Draw on right panel
-                #         right_x, right_y = world_to_img_right(world_x, world_y)
-                #         robot_right = world_to_img_right(self.current_pos[0], self.current_pos[1])
-                #         # cv2.line(combined_img, robot_right, (right_x, right_y), (0, 0, 255), 1)  # Red ray
-                #         cv2.circle(combined_img, (right_x, right_y), 2, (255, 0, 0), -1)  # Blue dot
+                        # Draw on right panel
+                        right_x, right_y = world_to_img_right(world_x, world_y)
+                        robot_right = world_to_img_right(self.current_pos[0], self.current_pos[1])
+                        # cv2.line(combined_img, robot_right, (right_x, right_y), (0, 0, 255), 1)  # Red ray
+                        cv2.circle(combined_img, (right_x, right_y), 2, (255, 0, 0), -1)  # Blue dot
 
                 # Add text overlay on left panel
                 info_text = [
@@ -592,8 +590,8 @@ class PathFollowingEnv(gym.Env):
                     x_range = self.env_world_limits[0][1] - self.env_world_limits[0][0]
                     y_range = self.env_world_limits[1][1] - self.env_world_limits[1][0]
                     
-                    img_x = int((x - self.env_world_limits[0][0]) * (img_width / x_range))
-                    img_y = int((self.env_world_limits[1][1] - y) * (img_height / y_range))
+                    img_x = int(round((x - self.env_world_limits[0][0]) * (img_width / x_range)))
+                    img_y = int(round((self.env_world_limits[1][1] - y) * (img_height / y_range)))
                     return img_x, img_y
 
                 # Draw grid using env_world_limits
@@ -846,7 +844,9 @@ class PathFollowingEnv(gym.Env):
         # Actual angular displacement in radians.
         actual_theta_rad = proposed_action[:, 1] * max_theta  
         # Convert angle to degrees (0-360).
-        actual_theta_deg = (np.degrees(actual_theta_rad)) % 360
+        actual_theta_deg = (np.rad2deg(actual_theta_rad)) % 360
+
+        lidar_points = lidar_points[np.newaxis, :]
         
         # Loop over each sample (usually batch size is 1).
         for i in range(batch_size):
@@ -862,7 +862,7 @@ class PathFollowingEnv(gym.Env):
                 if debug:
                     print(f"Sample {i}: Proposed action unsafe. Safety window readings: {readings}, Proposed L: {actual_L[i]}")
                 # Search for candidate angles in a broader range (e.g. ±30°) to find a free path.
-                candidate_range = np.arange(-30, 31)
+                candidate_range = np.arange(-n, n+1)
                 candidate_angles = (proposal_angle + candidate_range) % 360
                 best_candidate = None
                 best_diff = 360  # Initialize with maximum possible angular difference.

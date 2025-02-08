@@ -354,6 +354,7 @@ def evaluate_model(args, num_episodes=100):
     algo = args.algo.upper()
     model_path = args.ckpt_path
     policy_path = args.policy
+    render_type = args.render_type
 
     wandb.init(
         project="path-following-eval",
@@ -361,7 +362,7 @@ def evaluate_model(args, num_episodes=100):
         config={"num_episodes": num_episodes}
     )
     
-    env = make_env(algo, enable_reward_monitor=True, enable_wandb=args.wandb_log)
+    env = make_env(algo, enable_reward_monitor=True, enable_wandb=args.wandb_log, render_type=render_type)
     env = DummyVecEnv([lambda: env])
     # env = VecNormalize.load(f"models/vec_normalize.pkl", env)
 
