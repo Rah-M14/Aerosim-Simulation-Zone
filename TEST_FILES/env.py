@@ -13,7 +13,8 @@ import os
 import cv2
 from PIL import Image
 
-from LiDAR import get_lidar_points
+# from LiDAR import get_lidar_points
+from LiDAR_batch import get_lidar_points
 
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
@@ -194,8 +195,20 @@ class PathFollowingEnv(gym.Env):
         self.current_step += 1
         self.global_step += 1
         self.episode_length += 1
-        
-        new_pos = self.action_to_pos(action)
+
+        self.lidar_points, rel_points, lidar_dists = get_lidar_points(
+            self.binary_img,
+            self.current_pos,
+            self.env_world_limits,
+            num_rays=360,
+            max_range=4.0
+        )
+        # print(self.lidar_points.shape)
+
+        proposed_action = self.adjust_actions(lidar_dists, action, 30)
+        print(f"Action change: {action} -> {proposed_action}")
+
+        new_pos = self.action_to_pos(proposed_action)
         self.prev_pos = self.current_pos
         self.current_pos = new_pos
         self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
@@ -723,8 +736,8 @@ class PathFollowingEnv(gym.Env):
             except Exception as e:
                 print(f"Render error: {str(e)}")
                 import traceback
-                traceback.print_exc()
-    
+                traceback.print_exc()    
+                
     def close(self):
         if not self.headless:
             try:
@@ -784,3 +797,114 @@ class PathFollowingEnv(gym.Env):
 
         # return np.array([0.0, 0.0])
         return new_pos
+
+    def adjust_actions(self, lidar_points, proposed_action, n, debug=False):
+        """
+        Adjust the proposed (L, θ) action to avoid collisions and move into the closest free space.
+        
+        This function takes the LiDAR scan data (batch, 360) and a proposed action (batch, 2) provided
+        in normalized units (both values between -1 and 1). The linear component (L) is interpreted as 
+        L * max_step_size, and the angular component (θ) as θ * max_theta (in radians), where we assume:
+            max_step_size = 1.0  (agent's maximum displacement per step)
+            max_theta = π       (so that a normalized value of ±1 corresponds to ±π radians)
+        
+        For each sample in the batch, the function examines the LiDAR readings in a safety window of ±n 
+        degrees around the current proposed angle (converted to degrees) to determine if the proposed 
+        linear displacement would lead to a collision (i.e. if an obstacle is closer than the intended move).
+        
+        If a collision is predicted, the function searches over candidate angles (in a broader range, e.g. ±30°)
+        for the direction closest to the original that is free (i.e. whose window has a higher obstacle distance).
+        It then sets the new linear action to be the minimum of the original and (the candidate's safe distance 
+        multiplied by a margin) and returns the adjusted action in normalized units.
+        
+        Args:
+            lidar_points (np.ndarray): Array of shape (batch, 360) with LiDAR distances.
+            proposed_action (np.ndarray): Array of shape (batch,2) with normalized action values in [-1,1]
+                                          for [linear, angular] displacement.
+            n (int): Safety margin in degrees for collision checking (±n).
+            debug (bool): If True, prints debug statements.
+        
+        Returns:
+            np.ndarray: Adjusted action of shape (batch, 2) with normalized values in [-1,1].
+        """
+        # If the proposed_action is 1-dimensional, expand its dimensions.
+        was_single_action = False
+        if proposed_action.ndim == 1:
+            proposed_action = np.expand_dims(proposed_action, axis=0)
+            was_single_action = True
+
+        # Environment constants.
+        max_step_size = 1.0  # Actual maximum displacement (units)
+        max_theta = np.pi    # Maximum angular change in radians (normalized value ±1)
+        
+        batch_size = proposed_action.shape[0]
+        new_action = proposed_action.copy()
+        
+        # Convert normalized actions to actual environment values.
+        # Actual linear displacement (taking absolute value to assess distance).
+        actual_L = np.abs(proposed_action[:, 0]) * max_step_size  
+        # Actual angular displacement in radians.
+        actual_theta_rad = proposed_action[:, 1] * max_theta  
+        # Convert angle to degrees (0-360).
+        actual_theta_deg = (np.degrees(actual_theta_rad)) % 360
+        
+        # Loop over each sample (usually batch size is 1).
+        for i in range(batch_size):
+            # Define a narrow safety window ±n degrees around the proposed angle.
+            window_offsets = np.arange(-n, n + 1)
+            proposal_angle = np.round(actual_theta_deg[i]).astype(int)  # integer version of proposed angle.
+            indices = (proposal_angle + window_offsets) % 360
+            readings = lidar_points[i, indices]
+            
+            # The proposed action would be unsafe if any reading in the safety window
+            # is less than or equal to the intended displacement.
+            if (readings <= actual_L[i]).any():
+                if debug:
+                    print(f"Sample {i}: Proposed action unsafe. Safety window readings: {readings}, Proposed L: {actual_L[i]}")
+                # Search for candidate angles in a broader range (e.g. ±30°) to find a free path.
+                candidate_range = np.arange(-30, 31)
+                candidate_angles = (proposal_angle + candidate_range) % 360
+                best_candidate = None
+                best_diff = 360  # Initialize with maximum possible angular difference.
+                candidate_safe_distance = 0
+                
+                # For each candidate, evaluate its safety using a narrow window (±n).
+                for cand in candidate_angles:
+                    cand_indices = (cand + window_offsets) % 360
+                    cand_readings = lidar_points[i, cand_indices]
+                    # The safe distance is the smallest reading (i.e. the first obstacle encountered)
+                    # in the candidate's window.
+                    cand_safe_dist = np.min(cand_readings)
+                    diff_angle = min(abs(cand - actual_theta_deg[i]), 360 - abs(cand - actual_theta_deg[i]))
+                    # Choose candidate if it has some free space and is closer in angle to the original.
+                    if cand_safe_dist > 0 and diff_angle < best_diff:
+                        best_diff = diff_angle
+                        best_candidate = cand
+                        candidate_safe_distance = cand_safe_dist
+                
+                # If no candidate is found, fallback by reducing the linear displacement.
+                if best_candidate is None:
+                    new_actual_L = actual_L[i] * 0.5
+                    new_actual_theta_deg = actual_theta_deg[i]
+                    if debug:
+                        print(f"Sample {i}: No free candidate found; halving L to {new_actual_L}.")
+                else:
+                    new_actual_theta_deg = best_candidate
+                    margin = 0.9  # Safety margin: do not use the full available free distance.
+                    new_actual_L = min(actual_L[i], candidate_safe_distance * margin)
+                    if debug:
+                        print(f"Sample {i}: Candidate angle {best_candidate}° selected with safe distance {candidate_safe_distance}.")
+                        print(f"Sample {i}: New L set to {new_actual_L}.")
+                
+                # Update the action in normalized units.
+                new_action[i, 0] = np.clip(new_actual_L / max_step_size, -1, 1)
+                new_theta_rad = np.deg2rad(new_actual_theta_deg)
+                new_action[i, 1] = np.clip(new_theta_rad / max_theta, -1, 1)
+            else:
+                if debug:
+                    print(f"Sample {i}: Proposed action is safe.")
+        
+        # If the input was a single action (1D), return a 1D array.
+        if was_single_action:
+            return new_action[0]
+        return new_action
