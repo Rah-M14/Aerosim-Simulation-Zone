@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib.pyplot as plt
+import time
 import cv2
 
 def get_batched_lidar_points(binary_img, current_pos_batch, world_limits, num_rays=360, max_range=4.0):
@@ -102,18 +104,21 @@ def get_batched_lidar_points(binary_img, current_pos_batch, world_limits, num_ra
 
     return contact_points, lidar_dists
 
-
-import matplotlib.pyplot as plt
-import time
-
 def create_synthetic_binary_image():
     """
     Create a 200x200 synthetic binary image with a square obstacle in the center.
     1 = free space, 0 = obstacle.
     """
+    
     binary_img = np.ones((200, 200), dtype=np.uint8)
     binary_img[90:110, 90:110] = 0
     return binary_img
+
+def create_binary_image(image_path):
+    from PIL import Image
+    img = np.array(Image.open(image_path).convert('L'))  # Convert to grayscale
+    binary_img = (img > 128).astype(np.uint8)  # Threshold to create a binary map
+    binary_img = cv2.resize(binary_img, (0,0), fx=0.25, fy=0.25)
 
 def main():
     binary_img = create_synthetic_binary_image()

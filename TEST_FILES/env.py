@@ -13,8 +13,8 @@ import os
 import cv2
 from PIL import Image
 
-from LiDAR import get_lidar_points
-# from LiDAR_batch import get_lidar_points
+# from LiDAR import get_lidar_points
+from LiDAR_Fast import get_lidar_points
 
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
@@ -205,10 +205,16 @@ class PathFollowingEnv(gym.Env):
         )
         # print(self.lidar_points.shape)
 
-        proposed_action = self.adjust_actions(lidar_dists, action, self.agent_theta, 2, debug=True)
-        print(f"Action change: {action} -> {proposed_action}")
+        in_actions = np.array([action[0], np.rad2deg(action[1]*self.max_theta)])
 
+        proposed_action = self.collision_avoidance(self.current_pos, lidar_dists, in_actions, 2, debug=False)
+        proposed_action[1] = np.deg2rad(proposed_action[1])/self.max_theta
+        print(f"Action change: {action} -> {proposed_action}, with a diff of {proposed_action - action}")
+
+        old_pos = self.action_to_pos(action)
         new_pos = self.action_to_pos(proposed_action)
+        print(f"Position change: {old_pos} -> {new_pos}, with a diff of {new_pos - old_pos}")
+
         self.prev_pos = self.current_pos
         self.current_pos = new_pos
         self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
@@ -796,168 +802,166 @@ class PathFollowingEnv(gym.Env):
         # return np.array([0.0, 0.0])
         return new_pos
 
-    def adjust_actions(self, lidar_points, proposed_action, world_theta, n, debug=False):
+    def adjust_direction(self, lidar_points, proposed_displacement, n):
         """
-        Adjust the proposed (L, θ) action to avoid collisions and move into the closest free space.
-
-        This function takes the LiDAR scan data (batch, 360) and a proposed action (batch, 2) provided
-        in normalized units (both values between -1 and 1). The linear component (L) is interpreted as 
-        L * max_step_size, and the angular component (θ) is computed as follows:
-        
-           1. Convert the robot's current world orientation (world_theta, given in degrees) to radians.
-           2. Compute an angular offset by scaling the normalized proposed angular value by π (i.e. ±π radians).
-           3. Compute the desired heading as:
-                  desired_heading (radians) = world_theta (in radians) + (proposed_action[θ] * π)
-           4. Convert the desired heading to degrees (in the 0-359 range) for performing LiDAR safety checks.
-        
-        If a collision is predicted (using a safety window of ±n deg), the function searches for an alternative,
-        and may reduce the linear component if necessary. Finally, the new angular value is converted back
-        to a normalized value in [-1,1] (by dividing the found angular displacement (in radians) by π).
+        Adjust the proposed (linear, angular) displacement to avoid obstacles.
 
         Args:
-            lidar_points (np.ndarray): Array of shape (batch, 360) with LiDAR distances.
-            proposed_action (np.ndarray): Array of shape (batch, 2) with normalized action values in [-1,1]
-                                          for [linear, angular] displacement.
-            world_theta (float): The current world orientation of the robot in degrees.
-            n (int): Safety margin in degrees for collision checking (±n).
-            debug (bool): If True, prints debug statements.
+            lidar_points (np.ndarray): Array of shape (B, 360) with LiDAR obstacle distances.
+                A reading of 0 means no obstacle. If a single sample is provided,
+                it is automatically expanded to shape (1, 360).
+            proposed_displacement (np.ndarray): Array of shape (B, 2) representing the [linear, angular]
+                displacement in degrees (with theta already in [0, 360)). If a single sample is provided,
+                it is automatically expanded to shape (1, 2).
+            n (int): Safety margin in degrees (±n around the proposed angle).
 
         Returns:
-            np.ndarray: Adjusted action of shape (batch, 2) with normalized values in [-1,1].
+            np.ndarray: Adjusted displacement as an array of shape (B, 2) with angular values in [0,360).
+                        In the case of a single sample input, a 1D array is returned.
         """
-        if debug:
-            print(f"DEBUG: Initial proposed_action: {proposed_action}")
+        import numpy as np
 
-        # If the proposed_action is 1-dimensional, expand its dimensions.
-        was_single_action = False
-        if proposed_action.ndim == 1:
-            proposed_action = np.expand_dims(proposed_action, axis=0)
-            was_single_action = True
-
-        # Environment constants.
-        max_step_size = 1.0  # Actual maximum displacement (units)
-        max_theta = np.pi    # Maximum angular change in radians (i.e. normalized ±1 -> ±π)
-
-        batch_size = proposed_action.shape[0]
-        new_action = np.zeros((batch_size, 2))  # initialize the output array
-
-        # Convert the normalized linear action to actual displacement.
-        actual_L = np.abs(proposed_action[:, 0]) * max_step_size
-        if debug:
-            print(f"DEBUG: Computed actual_L: {actual_L}")
-
-        # Convert world_theta (in degrees) to radians.
-        world_theta_rad = np.deg2rad(world_theta)
-        # Compute the angular offset (in radians) from the normalized proposed action.
-        action_theta_offset_rad = proposed_action[:, 1] * max_theta
-
-        if proposed_action[:, 0] < 0:
-            action_theta_offset_rad = action_theta_offset_rad - np.pi
-
-        # Desired new heading in radians.
-        desired_heading_rad = world_theta_rad + action_theta_offset_rad
-        # Convert desired heading to degrees within 0-359.
-        actual_theta_deg = np.rad2deg(desired_heading_rad) % 360
-        if debug:
-            print(f"DEBUG: Computed desired_heading (deg): {actual_theta_deg}")
-
-        # Expand lidar_points to include batch dimension if needed.
+        # Ensure inputs are batched. If the proposed displacement is a single vector, expand dims.
+        single_action = False
+        if proposed_displacement.ndim == 1:
+            proposed_displacement = np.expand_dims(proposed_displacement, axis=0)
+            single_action = True
         if lidar_points.ndim == 1:
-            lidar_points = lidar_points[np.newaxis, :]
-        if debug:
-            print(f"DEBUG: lidar_points shape after potential expansion: {lidar_points.shape}")
+            lidar_points = np.expand_dims(lidar_points, axis=0)
 
-        # Loop over each sample.
-        for i in range(batch_size):
-            if debug:
-                print(f"DEBUG: Processing sample {i}")
-            # Define a narrow safety window ±n degrees.
-            window_offsets = np.arange(-n, n + 1)
-            if debug:
-                print(f"DEBUG: window_offsets: {window_offsets}")
-
-            # Round the intended heading (in degrees) to an integer.
-            proposal_angle = np.round(actual_theta_deg[i]).astype(int)
-            if debug:
-                print(f"DEBUG: Sample {i} proposal_angle: {proposal_angle}")
-
-            indices = (proposal_angle + window_offsets) % 360
-            if debug:
-                print(f"DEBUG: Sample {i} safety window indices: {indices}")
-
-            readings = lidar_points[i, indices]
-            if debug:
-                print(f"DEBUG: Sample {i} LiDAR readings in safety window: {readings}")
-
-            # If any reading in the window is <= 1.5 * max_step_size, the action is unsafe.
-            if (readings <= max_step_size * 1.5).any():
-                if debug:
-                    print(f"DEBUG: Sample {i}: Proposed action is unsafe.")
-                candidate_range = np.arange(-n, n+1)
-                candidate_angles = (proposal_angle + candidate_range) % 360
-                if debug:
-                    print(f"DEBUG: Sample {i}: candidate_range: {candidate_range}")
-                    print(f"DEBUG: Sample {i}: candidate_angles: {candidate_angles}")
-                best_candidate = None
-                best_diff = 360  # Initialize with maximum possible angular difference.
-                candidate_safe_distance = 0
-
-                # Evaluate candidate angles within the safety window.
-                for cand in candidate_angles:
-                    cand_indices = (cand + window_offsets) % 360
-                    cand_readings = lidar_points[i, cand_indices]
-                    cand_safe_dist = np.min(cand_readings)
-                    diff_angle = min(abs(cand - actual_theta_deg[i]), 360 - abs(cand - actual_theta_deg[i]))
-                    if debug:
-                        print(f"DEBUG: Sample {i}: Evaluating candidate angle {cand}:")
-                        print(f"       cand_indices: {cand_indices}")
-                        print(f"       cand_readings: {cand_readings}")
-                        print(f"       cand_safe_dist: {cand_safe_dist}, diff_angle: {diff_angle}")
-                    # Choose candidate if it has enough free space and is closer in angle to the original.
-                    if (cand_safe_dist > 0 and cand_safe_dist >= (max_step_size - 1e-2)) and diff_angle < best_diff:
-                        best_diff = diff_angle
-                        best_candidate = cand
-                        candidate_safe_distance = cand_safe_dist
-                        if debug:
-                            print(f"DEBUG: Sample {i}: New best candidate found: {cand} with diff {best_diff} and safe distance {cand_safe_dist}")
-
-                # If no candidate was found, reduce the linear displacement.
-                if best_candidate is None:
-                    new_actual_L = actual_L[i] * 0.5
-                    new_actual_theta_deg = actual_theta_deg[i]
-                    if debug:
-                        print(f"DEBUG: Sample {i}: No free candidate found; halving L to {new_actual_L}.")
-                else:
-                    new_actual_theta_deg = best_candidate
-                    margin = 0.9  # Use a safety margin.
-                    new_actual_L = min(actual_L[i], candidate_safe_distance * margin)
-                    if debug:
-                        print(f"DEBUG: Sample {i}: Candidate angle {best_candidate}° selected with safe distance {candidate_safe_distance}.")
-                        print(f"DEBUG: Sample {i}: New linear displacement set to {new_actual_L}.")
-
-                # Normalize the adjusted linear and angular actions.
-                new_action[i, 0] = np.clip(new_actual_L / max_step_size, -1, 1)
-                new_theta_rad = np.deg2rad(new_actual_theta_deg)
-                new_action[i, 1] = np.clip(new_theta_rad / max_theta, -1, 1)
-                if debug:
-                    print(f"DEBUG: Sample {i}: Updated action: linear = {new_action[i, 0]}, angular (normalized) = {new_action[i, 1]}")
-            elif (readings <= max_step_size * 3).any():
-                new_action[i, 0] = actual_L[i] / 2
-                if debug:
-                    print(f"DEBUG: Sample {i}: Proposed action is safe but L is halved to {new_action[i, 0]}")
+        # If batch sizes do not match and lidar_points has one sample, repeat it.
+        if lidar_points.shape[0] != proposed_displacement.shape[0]:
+            if lidar_points.shape[0] == 1:
+                lidar_points = np.repeat(lidar_points, proposed_displacement.shape[0], axis=0)
             else:
-                # If no adjustments are needed, pass the proposed normalized action.
-                new_action[i, 0] = proposed_action[i, 0]
-                new_action[i, 1] = proposed_action[i, 1]
-                if debug:
-                    print(f"DEBUG: Sample {i}: Proposed action is safe, no adjustments made.")
+                raise ValueError("Mismatched batch sizes between lidar_points and proposed_displacement")
 
-        if was_single_action:
-            if debug:
-                print(f"DEBUG: Returning single action: {new_action[0]}")
-            return new_action[0]
+        # Now, lidar_points: (B, 360) and proposed_displacement: (B, 2)
+        L = proposed_displacement[:, 0]
+        # Ensure theta is in [0,360) (we assume the proposed theta is already in degrees)
+        theta = proposed_displacement[:, 1] % 360
+
+        # Adjust theta if linear displacement is negative.
+        abs_L = np.abs(L)
+        # For negative L, add 180° to the angle.
+        theta = np.where(L < 0, (theta + 180) % 360, theta)
+
+        # Use the rounded (integer) angle for indexing.
+        theta_round = np.round(theta).astype(int) % 360
+        window_offsets = np.arange(-n, n + 1)
+        # For each sample, compute safety window indices (shape: (B, 2n+1))
+        indices = (theta_round[:, None] + window_offsets) % 360
+
+        # Take LiDAR readings along the safety window.
+        readings = np.take_along_axis(lidar_points, indices, axis=1)
+        # A reading is unsafe if it is greater than 0 but less than or equal to 1.5 times the absolute displacement.
+        is_proposed_safe = ~((readings > 0) & (readings <= 1.5 * abs_L[:, None])).any(axis=1)
+
+        # Prepare output arrays.
+        new_L = L.copy()
+        new_theta = theta.copy()
+
+        # For unsafe samples, search for a safe candidate.
+        unsafe = np.where(~is_proposed_safe)[0]
+        if unsafe.size > 0:
+            candidate_angles = np.arange(360)
+            candidate_windows = (candidate_angles[:, None] + window_offsets) % 360  # shape: (360, 2n+1)
+            for i in unsafe:
+                lidar_row = lidar_points[i]  # shape: (360,)
+                # Get candidate window readings from the LiDAR row.
+                candidate_readings = lidar_row[candidate_windows]  # shape: (360, 2n+1)
+                candidate_safe = ~((candidate_readings > 0) & (candidate_readings <= 1.5 * abs_L[i])).any(axis=1)
+
+                if not candidate_safe.any():
+                    # No candidate found: reduce the linear displacement.
+                    new_L[i] = new_L[i] / 2
+                    print("no path found")
+                else:
+                    # Find candidate angles closest to the proposed angle.
+                    diff = np.abs(candidate_angles - theta[i])
+                    diff = np.minimum(diff, 360 - diff)
+                    diff[~candidate_safe] = 360
+                    best_angle = candidate_angles[np.argmin(diff)]
+                    new_theta[i] = best_angle % 360
+
+        # If any updated linear displacement is negative, adjust the angle accordingly.
+        new_theta = np.where(new_L < 0, (new_theta - 180) % 360, new_theta)
+        result = np.stack([new_L, new_theta % 360], axis=1)
+        if single_action:
+            return result[0]  # Return single action as 1D array.
+        return result
+
+    def collision_avoidance(self, current_pos, lidar_dists, action, safe_distance=1.0, search_range=30, angle_step=5, debug=False):
+        """
+        Simple collision avoidance function.
+        
+        The function assumes that the LiDAR distances are provided in a 1D array with 360 elements,
+        where each index corresponds to the distance reading (in world units) at that degree.
+        
+        The proposed action is given as [linear, angular] where:
+          - linear is the proposed step (e.g., in world units),
+          - angular is the desired heading in degrees (0-359).
+        
+        If the LiDAR reading at the proposed angle is lower than safe_distance, the function searches 
+        within ±search_range (in increments of angle_step) for a direction that is safe.
+        
+        Args:
+            current_pos (np.ndarray): The agent's current (x,y) position in the world (not used in the logic, 
+                                      but available if needed).
+            lidar_dists (np.ndarray): 1D array of LiDAR distances with shape (360,). Each index corresponds 
+                                      to the LiDAR reading at that degree.
+            action (np.ndarray): Proposed action as [linear, angular] (angular value in degrees).
+            safe_distance (float): Minimum clearance required (in world units).
+            search_range (int): Degrees to search to the left and right of the proposed direction.
+            angle_step (int): Increment (in degrees) used when searching for a safe direction.
+            debug (bool): If True, prints debugging information.
+        
+        Returns:
+            np.ndarray: Adjusted action as [linear, angular]. If no safe candidate is found, the linear 
+                        component is set to 0.
+        """
+        # Ensure the proposed angular component is in [0, 360)
+        proposed_linear = action[0]
+        proposed_angle = action[1] % 360
 
         if debug:
-            print(f"DEBUG: Returning batch of actions: {new_action}")
-            print("DEBUG: Exiting adjust_actions")
+            print(f"Proposed action: linear = {proposed_linear}, angle = {proposed_angle}°")
+            print(f"Clearance at proposed angle ({proposed_angle}°): {lidar_dists[int(round(proposed_angle))]}")
+
+        # Check if the proposed direction is safe.
+        if lidar_dists[int(round(proposed_angle))] >= safe_distance:
+            if debug:
+                print("Proposed direction is safe.")
+            return action
+
+        # Search for a safe direction within ±search_range.
+        candidate_angle = None
+        for offset in range(0, search_range + 1, angle_step):
+            # Check left direction.
+            left_angle = (proposed_angle - offset) % 360
+            clearance_left = lidar_dists[int(round(left_angle))]
+            # Check right direction.
+            right_angle = (proposed_angle + offset) % 360
+            clearance_right = lidar_dists[int(round(right_angle))]
+
+            if debug:
+                print(f"Checking offset {offset}°:")
+                print(f"    Left angle {left_angle}° clearance = {clearance_left}")
+                print(f"    Right angle {right_angle}° clearance = {clearance_right}")
+
+            if clearance_left >= safe_distance or clearance_right >= safe_distance:
+                # Choose the candidate with higher clearance.
+                candidate_angle = left_angle if clearance_left >= clearance_right else right_angle
+                if debug:
+                    print(f"Safe candidate found at {candidate_angle}°")
+                break
+
+        new_action = action.copy()
+        if candidate_angle is None:
+            if debug:
+                print("No safe candidate found. Stopping movement.")
+            new_action[0] = 0.0  # Reduce forward motion if no safe path found
+        else:
+            new_action[1] = candidate_angle
+
         return new_action
