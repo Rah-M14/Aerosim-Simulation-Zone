@@ -57,7 +57,7 @@ def group_angle_ranges(angles, mask, min_len=1):
         return groups
 
 def process_safe_angles(lidar_dists, bot_orientation, threshold, num_rays=360,
-                        finite_min_len=6, infinite_min_len=6, n_centres=3, 
+                        finite_min_len=12, infinite_min_len=6, n_centres=3, 
                         goal_orientation=None):
     """
     Process the LiDAR distances and group safe angles into finite and infinite safe groups,
@@ -303,7 +303,7 @@ def demo_plot_safe_angles():
     world_limits = np.array([[-10, 10], [-8, 8]])
     
     # Set the sensor position.
-    sensor_pos = np.array([5, -3.5])
+    sensor_pos = np.array([-5, -0.5])
     
     # Define the distance threshold.
     threshold = 3.0

@@ -77,15 +77,12 @@ def get_lidar_centres_tensor(sensor_pos, bot_orientation, binary_img, world_limi
                                                        num_rays=num_rays, max_range=max_range)
         # Process safe angles. (process_safe_angles expects a scalar orientation.)
         bot_orient_val = bot_orientation.item() if torch.is_tensor(bot_orientation) else bot_orientation
-        ic, fc, _, _ = process_safe_angles(lidar_dists, bot_orient_val, threshold,
+        ic, fc, ib, fb = process_safe_angles(lidar_dists, bot_orient_val, threshold,
                                            num_rays=num_rays, finite_min_len=6, infinite_min_len=6, n_centres=3)
-        ic = ic[0]  # shape (3,)
-        fc = fc[0]  # shape (3,)
-        # Interleave the groups: [ic0, fc0, ic1, fc1, ic2, fc2]
-        lidar_array = np.empty((6,), dtype=np.float32)
-        for i in range(3):
-            lidar_array[2*i]     = ic[i]
-            lidar_array[2*i + 1] = fc[i]
+        
+        # print(f"ic: {ic.shape}, fc: {fc.shape}")
+        lidar_array = np.concatenate([np.array(ic)[:3], np.array(fc)[:3]], axis=1).flatten()
+        # print(f"lidar array: {lidar_array.shape}")
         # Convert back to torch tensor (and copy sensor device if needed)
         lidar_tensor = torch.tensor(lidar_array, dtype=torch.float32)
         if torch.is_tensor(sensor_pos):
@@ -148,6 +145,8 @@ def simulate_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, w
 
         # --- Extract LiDAR centres ---
         lidar_centres = get_lidar_centres_tensor(current_pos, relative_theta, binary_img, world_limits, threshold)
+        lidar_centres = (lidar_centres + np.pi) % (2 * np.pi) - np.pi
+
         # Ensure lidar_features has the proper batch shape
         if lidar_centres.ndim == 1:
             lidar_features = (lidar_centres / torch.pi).unsqueeze(0)
@@ -171,33 +170,29 @@ def simulate_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, w
         controls = net(net_input)  # (batch,2); controls[:,0] = L, controls[:,1] = delta_theta (scaled)
         L = controls[:, 0].cpu()      # linear velocity (batch,)
         delta_theta = controls[:, 1].cpu() * torch.pi  # scale tanh output to [-pi, pi] (batch,)
+        # delta_theta_norm = delta_theta.clone().detach() + torch.pi # [0, 2pi]
 
-        # --- Collision-Avoidance Penalty ---
-        desired_heading = theta + delta_theta.detach().cpu()  # (batch,)
-        # We assume the lidar centres come in pairs. Create three candidate headings by averaging:
-        candidate1 = (lidar_centres[:, 0] + lidar_centres[:, 1]) / 2.0
-        candidate2 = (lidar_centres[:, 2] + lidar_centres[:, 3]) / 2.0
-        candidate3 = (lidar_centres[:, 4] + lidar_centres[:, 5]) / 2.0
+        # --- Collision-Avoidance Penalty (Fixed for Batched Differences) ---
+        # Compute desired heading for each sample as a single value, then unsqueeze to shape (batch, 1)
+        desired_heading = (theta + delta_theta).unsqueeze(1)  # shape: (batch, 1) 
 
-        # Compute angular distances (all in radians)
-        def angular_distance(a, b):
-            diff = torch.abs(a - b)
-            return torch.min(diff, 2 * torch.pi - diff)
-        diff1 = angular_distance(desired_heading, candidate1)
-        diff2 = angular_distance(desired_heading, candidate2)
-        diff3 = angular_distance(desired_heading, candidate3)
-        # Choose the candidate giving the smallest difference (optionally weight if desired)
-        diff_stack = torch.stack([diff1, diff2, diff3], dim=1)  # (batch,3)
-        collision_soft_weights = torch.nn.functional.softmin(diff_stack, dim=1)      # (batch,3)
-        collision_penalty = (collision_soft_weights * diff_stack).sum(dim=1)     # (batch)
-        # print(f"Coll Soft pen: {diff_stack.mean()}")
-        collision_weight = 0.9
+        # Ensure lidar_centres is a torch tensor on the proper device.
+        if not torch.is_tensor(lidar_centres):
+            lidar_centres = torch.tensor(lidar_centres, dtype=torch.float32, device=desired_heading.device) # [batch, 6]
+        else:
+            lidar_centres = lidar_centres.to(desired_heading.device) # [batch, 6]
 
-        # # Optional: penalty for abrupt control changes (smoothness)
-        # if prev_controls is not None:
-        #     control_change = (controls - prev_controls).pow(2).sum(dim=1)  # (batch,)
-        #     total_loss += 0.25 * control_change.mean()
-        # prev_controls = controls.detach()
+        # Compute the angular differences element-wise.
+        # This gives a tensor of shape (batch, 6) with the differences between the desired heading and each LiDAR centre.
+        abs_diff = torch.abs(desired_heading - lidar_centres)
+        diff_stack = torch.minimum(abs_diff, 2 * torch.pi - abs_diff)
+
+        # Apply a softmin over the 3 candidates so that lower differences are weighted higher.
+        collision_soft_weights = torch.nn.functional.softmin(diff_stack, dim=1)  # (batch, 6)
+
+        # Compute a weighted collision penalty.
+        collision_penalty = (collision_soft_weights * diff_stack).sum(dim=1)  # (batch,)
+        collision_weight = 1.0
 
         # --- Update heading and position ---
         theta = theta + delta_theta
@@ -214,6 +209,7 @@ def simulate_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, w
         # control_loss = 0.1 * torch.abs(delta_theta)
         # print(f"Step_position_Loss: {step_position_loss.mean()}")
         step_loss = step_position_loss + collision_weight * collision_penalty
+
         # print(f"Step Loss: {step_loss.mean()}")
         total_loss += step_loss.mean()
         # print(f"Total Loss: {total_loss}")
@@ -273,6 +269,114 @@ def physics_collision_loss(net, initial_pos, goal_pos, binary_img, world_limits)
 ###############################################################
 # A simple plotting function (updated version for a single traj)
 ###############################################################
+
+
+def evaluate_model_on_world(net, initial_pos, goal_pos, binary_img, world_limits, max_steps=12, threshold=3.0):
+    """
+    Evaluate the trained model on the given world image by simulating a trajectory
+    from initial_pos to goal_pos and plotting its path overlaid on the binary world image.
+    
+    Parameters:
+      net         : Trained navigation network.
+      initial_pos : Start position as a torch tensor (shape: (2,)) or NumPy array.
+      goal_pos    : Goal position as a torch tensor (shape: (2,)) or NumPy array.
+      binary_img  : The environment's binary image (e.g., produced by create_binary_image()).
+      world_limits: NumPy array with shape (2,2): [[xmin, xmax], [ymin, ymax]].
+      max_steps   : Maximum steps to simulate.
+      threshold   : LiDAR threshold used for extracting safe groups.
+      
+    This function simulates the trajectory by repeatedly querying the network, and then
+    plots the path (with markers for start and goal) atop the world image.
+    """
+    import matplotlib.pyplot as plt  # Ensure matplotlib is imported here if needed.
+    
+    with torch.no_grad():
+        # Convert inputs to torch tensors if needed.
+        if not torch.is_tensor(initial_pos):
+            initial_pos = torch.tensor(initial_pos, dtype=torch.float32)
+        if not torch.is_tensor(goal_pos):
+            goal_pos = torch.tensor(goal_pos, dtype=torch.float32)
+        
+        # For a single sample, add a batch dimension if needed.
+        if initial_pos.ndim == 1:
+            initial_pos = initial_pos.unsqueeze(0)
+        if goal_pos.ndim == 1:
+            goal_pos = goal_pos.unsqueeze(0)
+        
+        # Begin simulation.
+        current_pos = initial_pos.clone()  # (batch, 2)
+        batch_size = current_pos.shape[0]
+        # We assume a single-sample evaluation so that batch_size==1.
+        theta = torch.zeros(batch_size, device=current_pos.device)  # initial heading (batch,)
+        positions = [current_pos.cpu().numpy().squeeze()]  # record starting position
+        
+        for step in range(max_steps):
+            delta_pos = goal_pos - current_pos  # (batch, 2)
+            rel_angle = torch.atan2(delta_pos[:, 1], delta_pos[:, 0])  # (batch,)
+            relative_theta = rel_angle - theta
+            relative_theta = (relative_theta + torch.pi) % (2 * torch.pi) - torch.pi
+            
+            # Extract LiDAR centres (using our batched-friendly version)
+            lidar_centres = get_lidar_centres_tensor(current_pos, theta, binary_img, world_limits, threshold=threshold)
+            if lidar_centres.ndim == 1:
+                lidar_features = (lidar_centres / torch.pi).unsqueeze(0)
+            else:
+                lidar_features = lidar_centres / torch.pi  # (batch,6)
+            
+            # Build the 6 navigation features.
+            nav_features = torch.stack([
+                current_pos[:, 0] / 10,
+                current_pos[:, 1] / 7,
+                goal_pos[:, 0]    / 10,
+                goal_pos[:, 1]    / 7,
+                theta           / torch.pi,
+                relative_theta  / torch.pi
+            ], dim=1)  # (batch,6)
+            
+            # Concatenate navigation features with LiDAR centres (total 12-D input).
+            net_input = torch.cat([nav_features, lidar_features], dim=1)  # (batch,12)
+            
+            # Get network controls.
+            controls = net(net_input)  # (batch,2): controls[:,0]=L, controls[:,1]=delta_theta (scaled)
+            L = controls[:, 0]
+            delta_theta = controls[:, 1] * torch.pi  # scale tanh output to [-pi, pi]
+            
+            # Update heading and position.
+            theta = theta + delta_theta
+            theta = (theta + torch.pi) % (2 * torch.pi) - torch.pi
+            
+            delta_x = L * torch.cos(theta)
+            delta_y = L * torch.sin(theta)
+            movement = torch.stack([delta_x, delta_y], dim=1)
+            current_pos = current_pos + movement
+            
+            positions.append(current_pos.cpu().numpy().squeeze())
+            
+            # Stop if the agent is close enough to the goal.
+            if torch.norm(delta_pos, dim=1).item() < 0.1:
+                break
+        
+        # Convert the collected positions to a NumPy array.
+        positions = np.array(positions)
+        
+        # Plot the trajectory overlaying the binary world image.
+        plt.figure(figsize=(10, 8))
+        # Use extent to align the image to world coordinates.
+        extent = (world_limits[0, 0], world_limits[0, 1], world_limits[1, 0], world_limits[1, 1])
+        plt.imshow(binary_img, cmap='gray', extent=extent, origin='lower')
+        plt.plot(positions[:, 0], positions[:, 1], 'r-o', markersize=5, label='Trajectory')
+        plt.scatter(positions[0, 0], positions[0, 1], c='green', s=150, marker='*', label='Start')
+        # If goal_pos was unsqueezed, take its first element.
+        goal_np = goal_pos.cpu().numpy().squeeze()
+        plt.scatter(goal_np[0], goal_np[1], c='blue', s=150, marker='X', label='Goal')
+        plt.title("Evaluated Trajectory on World Image")
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+
 def plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world_limits, epoch_no, max_steps=22, threshold=3.0):
     """Simulate and plot a single trajectory using PyTorch tensors (augmented input)."""
     with torch.no_grad():
@@ -320,8 +424,10 @@ def plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world
             if torch.norm(delta_pos) < 0.1:
                 break
         
+        img = r"F:\Aerosim-Simulation-Zone\Try\New_WR_World.png"
         positions = np.array(positions)
         plt.figure(figsize=(8, 6))
+        plt.imshow(binary_img, extent=[-10, 10, -8, 8], cmap='gray')
         plt.plot(positions[:, 0], positions[:, 1], 'b-o', markersize=4, label='Path')
         plt.scatter(positions[0, 0], positions[0, 1], c='green', s=200, marker='*', label='Start')
         plt.scatter(goal_pos[0].item(), goal_pos[1].item(), c='red', s=200, marker='X', label='Goal')
@@ -332,6 +438,7 @@ def plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world
         plt.axis('equal')
         plt.legend()
         plt.show(block=False)
+        # plt.show()
         plt.savefig(os.path.join(r"F:\Aerosim-Simulation-Zone\Try\FIGS", f"{epoch_no}.png"))
         plt.close('all')
 
@@ -340,6 +447,8 @@ def plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world
 # TRAINING LOOP
 #############################################
 device="cuda"
+# model = r"F:\Aerosim-Simulation-Zone\coll_free_nav_model.pth"
+# net = torch.load(model, weights_only=False)
 net = NavigationNet().to(device)
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
 
@@ -348,7 +457,10 @@ binary_img = create_binary_image(image_path=r"F:\Aerosim-Simulation-Zone\Try\New
 # Define world boundaries (adjust as needed)
 world_limits = np.array([[-10, 10], [-8, 8]])
 batch_size = 512
-for epoch in tqdm.tqdm(range(10000)):
+epochs = 15000
+pbar = tqdm.tqdm(range(epochs), desc="Training", dynamic_ncols=True) 
+
+for epoch in pbar:
     # Generate a batch using PhiFlow (the original batch generator outputs batched tensors).
     # For our collision simulation we use only one sample at a time.
     initial_pos, goal_pos = generate_batch(batch_size, min_distance=0.5, max_distance=20.0)
@@ -364,6 +476,7 @@ for epoch in tqdm.tqdm(range(10000)):
         continue
 
     loss.backward()
+    pbar.set_postfix(loss=loss.item())
     torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
     
     has_nan = False
@@ -387,11 +500,11 @@ for epoch in tqdm.tqdm(range(10000)):
             print(f"Epoch {epoch}, Loss: {test_loss.item():.4f}")
             plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world_limits, epoch_no=epoch, max_steps=20, threshold=3.0)
 
-# Finally, test on one sample and save the model.
-with torch.no_grad():
-    initial_torch = torch.tensor([4.5, -3.2], dtype=torch.float32)
-    goal_torch = torch.tensor([2.1, -6.1], dtype=torch.float32)
-    test_loss = physics_collision_loss(net, initial_torch, goal_torch, binary_img, world_limits)
-    plot_trajectory_with_collision(net, initial_torch, goal_torch, binary_img, world_limits, epoch_no=epoch, max_steps=60, threshold=3.0)
+torch.save(net, 'new_coll_nav_model.pth')
 
-torch.save(net, 'coll_nav_model.pth')
+# # Finally, test on one sample and save the model.
+with torch.no_grad():
+    initial_torch = torch.tensor([4.8, 6], dtype=torch.float32)
+    goal_torch = torch.tensor([-3.1, 0.5], dtype=torch.float32)
+    test_loss = physics_collision_loss(net, initial_torch, goal_torch, binary_img, world_limits)
+    plot_trajectory_with_collision(net, initial_torch, goal_torch, binary_img, world_limits, epoch_no=1, max_steps=22, threshold=3.0)
