@@ -43,35 +43,34 @@ class NavigationNet(BaseFeaturesExtractor):
         """
         vector: [6] (input features)
         lidar_mask: [360] (input features)
-        """        
-        raw_output = self.features(observations['vector'])
-        L = self.linear_head(raw_output).squeeze(-1)  # [0,1] magnitude
-        theta_raw = (self.angular_head(raw_output).squeeze(-1) * (2 * torch.pi)) % (2 * torch.pi)  # [0, 2π]
+        """
 
-        # print(f"L: {L.shape}, L_value: {L}, theta_raw: {theta_raw.shape}, Theta_Raw: {theta_raw}")
+        raw_output = self.features(observations['vector'])
+
+        L = self.linear_head(raw_output)  # [0,1] magnitude
+        theta_raw = (self.angular_head(raw_output) * (2 * torch.pi)) % (2 * torch.pi)  # [0, 2π]
+
+        # print(f"L: {L.shape}, theta_raw: {theta_raw.shape}")
 
         theta_deg = torch.rad2deg(theta_raw)
         theta_bin = theta_deg.long()
         all_bins = torch.arange(360, device=observations['vector'].device)
         bin_distances = torch.abs(all_bins.float() - theta_bin)
-
         # print(f"all_bins: {all_bins.shape}, bin_distances: {bin_distances.shape}, theta_bin: {theta_bin.shape}")
         
         safe_weights = F.softmax(-bin_distances / self.distance_temp, dim=-1)
         safe_weights = safe_weights * observations['lidar_mask']  # Zero out unsafe
         safe_probs = F.gumbel_softmax(safe_weights.log(), tau=0.5, hard=True)
-
         # print(f"safe_weights: {safe_weights.shape}, safe_probs: {safe_probs.shape}")
 
         nearest_bin = torch.argmax(safe_probs, dim=-1)
         theta_safe_deg = (nearest_bin.float())
         theta_safe = torch.deg2rad(theta_safe_deg)
-
         # print(f"nearest_bin: {nearest_bin.shape}, theta_safe: {theta_safe.shape}")
     
-        confidence = 1 / (1 + bin_distances.gather(-1, nearest_bin))
-        final_theta = confidence * theta_raw + (1 - confidence) * theta_safe
+        confidence = 1 / (1 + bin_distances.gather(-1, nearest_bin.unsqueeze(-1))).squeeze(-1)
+        # print(f"confidence: {confidence.shape}")
+        final_theta = confidence * theta_raw.squeeze(-1) + (1 - confidence) * theta_safe
+        # print(f"final_theta: {final_theta.shape}")
 
-        # print(f"confidence: {confidence.shape}, final_theta: {final_theta.shape}")
-
-        return torch.stack([L, final_theta], dim=-1)
+        return torch.stack([L.squeeze(-1), final_theta], dim=-1)

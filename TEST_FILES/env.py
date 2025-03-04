@@ -231,7 +231,7 @@ class PathFollowingEnv(gym.Env):
 
         goal_dist = np.linalg.norm(self.goal_pos - self.current_pos)
         
-        if goal_dist < 0.1:
+        if goal_dist < 0.5:
             done = True
             success_reward = self.reward_manager.GOAL_REACHED_REWARD
             reward = success_reward

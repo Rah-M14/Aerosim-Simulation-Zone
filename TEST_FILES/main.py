@@ -8,6 +8,8 @@ import torch.nn as nn
 
 from stable_baselines3 import SAC, PPO, TD3
 from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
+from stable_baselines3.sac import MultiInputPolicy as SACMultiPolicy
+from stable_baselines3.td3 import MultiInputPolicy as TD3MultiPolicy
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.monitor import Monitor
@@ -189,7 +191,7 @@ def main(args):
         print(f"No checkpoint found, starting new training")
         if algorithm == "SAC":
             model = SAC(
-                "MlpPolicy",
+                SACMultiPolicy,
                 env,
                 learning_rate=3e-4,
                 buffer_size=1000000,
@@ -231,7 +233,7 @@ def main(args):
             )
 
             model = TD3(
-                "MlpPolicy",
+                TD3MultiPolicy,
                 env,
                 learning_rate=0.001,
                 buffer_size=1000000,
@@ -256,45 +258,73 @@ def main(args):
     #     nn.Sigmoid()
     # )
 
+    print(f"TEST PRINT: MODEL POLICY: {model.policy}")
+
     # feature_ex = model.policy.features_extractor
     # print(f"TEST PRINT: FEATURE EXTRACTOR: {feature_ex}")
 
     pretrained_fe_path = r"F:\Aerosim-Simulation-Zone\Try\FIGS_Bound\checkpoint_epoch_24000.pth"
     pretrained_state_dict = torch.load(pretrained_fe_path, weights_only=False)
 
-    # print(f"TEST PRINT: PRETRAINED STATE DICT: {pretrained_state_dict.state_dict().keys()}")
-    model.policy.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+    if algorithm == "PPO":
+        model.policy.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
 
-    for param in model.policy.features_extractor.parameters():
-        param.requires_grad = False
+        for param in model.policy.features_extractor.parameters():
+            param.requires_grad = False
+            
+        # print("\n=== Feature Extractor Parameters ===")
+        # check if all the model weights are frozen
+        # for name, param in model.policy.features_extractor.named_parameters():
+            # print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
         
-    # check if all the model weights are frozen
-    # for name, param in model.policy.features_extractor.named_parameters():
-        # print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        # Setting em to evaluation mode to disable layers like dropout or batchnorm behavior
+        model.policy.features_extractor.eval()
 
-    model.policy.features_extractor.eval()
+    elif algorithm == "SAC":
+        model.policy.actor.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+        model.policy.critic.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+        model.policy.critic_target.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
 
-    print(f"TEST PRINT: MODEL POLICY: {model.policy}")
+        for param in model.policy.actor.features_extractor.parameters():
+            param.requires_grad = False
+        for param in model.policy.critic.features_extractor.parameters():
+            param.requires_grad = False
+        for param in model.policy.critic_target.features_extractor.parameters():
+            param.requires_grad = False
+
+        # print("\n=== Feature Extractor Parameters ===")
+        # for name, param in model.policy.actor.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        # for name, param in model.policy.critic.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        # for name, param in model.policy.critic_target.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+
+        # Setting em to evaluation mode to disable layers like dropout or batchnorm behavior
+        model.policy.actor.features_extractor.eval()
+        model.policy.critic.features_extractor.eval()
+        model.policy.critic_target.features_extractor.eval() 
+
         
     # Print complete model architecture
     print("\n=== Complete Model Architecture ===")
     print("\n1. Policy Network (Actor):")
     print(f"Input Shape: {env.observation_space.shape}")
-    print("\nMLP Extractor Policy Network:")
-    for name, module in model.policy.mlp_extractor.policy_net.named_children():
-        print(f"  {name}: {module}")
+    # print("\nMLP Extractor Policy Network:")
+    # for name, module in model.policy.mlp_extractor.policy_net.named_children():
+        # print(f"  {name}: {module}")
     
-    print("\nAction Network (Final layer):")
-    print(f"  Action Net: {model.policy.action_net}")
-    print(f"Output Shape: {env.action_space.shape}")
+    # print("\nAction Network (Final layer):")
+    # print(f"  Action Net: {model.policy.action_net}")
+    # print(f"Output Shape: {env.action_space.shape}")
 
-    print("\n2. Value Network (Critic):")
-    print("\nMLP Extractor Value Network:")
-    for name, module in model.policy.mlp_extractor.value_net.named_children():
-        print(f"  {name}: {module}")
+    # print("\n2. Value Network (Critic):")
+    # print("\nMLP Extractor Value Network:")
+    # for name, module in model.policy.mlp_extractor.value_net.named_children():
+    #     print(f"  {name}: {module}")
     
-    print("\nValue Network (Final layer):")
-    print(f"  Value Net: {model.policy.value_net}")
+    # print("\nValue Network (Final layer):")
+    # print(f"  Value Net: {model.policy.value_net}")
     
     # Print parameter counts
     def count_parameters(model):
@@ -302,8 +332,8 @@ def main(args):
     
     print("\n=== Parameter Counts ===")
     print(f"Total Trainable Parameters: {count_parameters(model.policy):,}")
-    print(f"Policy Network Parameters: {count_parameters(model.policy.mlp_extractor.policy_net) + count_parameters(model.policy.action_net):,}")
-    print(f"Value Network Parameters: {count_parameters(model.policy.mlp_extractor.value_net) + count_parameters(model.policy.value_net):,}")
+    # print(f"Policy Network Parameters: {count_parameters(model.policy.mlp_extractor.policy_net) + count_parameters(model.policy.action_net):,}")
+    # print(f"Value Network Parameters: {count_parameters(model.policy.mlp_extractor.value_net) + count_parameters(model.policy.value_net):,}")
 
     # model_till_last = nn.Sequential(*list(model.policy.mlp_extractor.policy_net.children()))
     # print("\nModel architecture till last layer:")
@@ -410,7 +440,7 @@ def evaluate_model(args, num_episodes=100):
 
     elif algo == "SAC":
         model = SAC(
-            "MlpPolicy",
+            SACMultiPolicy,
             env,
             learning_rate=3e-4,
             buffer_size=1000000,
@@ -450,7 +480,7 @@ def evaluate_model(args, num_episodes=100):
             )
 
         model = TD3(
-            "MlpPolicy",
+            TD3MultiPolicy,
             env,
             learning_rate=0.001,
             buffer_size=1000000,
