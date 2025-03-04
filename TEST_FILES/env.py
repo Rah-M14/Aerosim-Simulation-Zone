@@ -6,21 +6,15 @@ from typing import Optional, Tuple, Dict, Any
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-# from matplotlib.patches import Circle, Arrow, Polygon
-# import matplotlib.colors as mcolors
-# import matplotlib.transforms as mtransforms
 import os
 import cv2
 from PIL import Image
 
-# from LiDAR import get_lidar_points
-from LiDAR_Fast import get_lidar_points
-
+from LiDAR_Fast import *
 from RRTStar import RRTStarPlanner, gen_goal_pose
 from Path_Manager import PathManager
 from configs import ObservationConfig
 from new_reward_manager import RewardManager
-# from simple_rew_manager import RewardManager
 from reward_monitor import RewardMonitor
 
 obs_config = ObservationConfig()
@@ -58,7 +52,6 @@ class PathFollowingEnv(gym.Env):
         self.episode_num = 1
         
         self.agent_theta = 0.0
-        # self.world_max = np.array([8, 6])
         self.world_max = np.array([10, 7])
         self.world_limits = np.array([[-8, 8], [-6, 6]])
         self.env_world_limits = np.array([[-10, 10], [-8, 8]])
@@ -66,12 +59,15 @@ class PathFollowingEnv(gym.Env):
 
         # Movement parameters
         self.max_step_size = 1  # Maximum distance the agent can move in one step
-        self.max_theta = np.pi  # Maximum angle the agent can move in one step
+        self.max_theta = 2*np.pi  # Maximum angle the agent can move in one step
 
         # LiDAR Parameters
         self.lidar_specs = [1, 360, 720, 500] # [resolution, FOV, #Rays, distance]
-        self.lidar_points = None
         self.lidar_bounds = ((-10, 8), (10, -8))  # (left_corner, right_corner)
+        self.lidar_thresh = 1.5
+        self.lidar_points = None
+        self.lidar_dists = None
+        self.lidar_mask = None
 
         self.action_space = spaces.Box(
             low=np.array([-1.0, -1.0]),
@@ -80,29 +76,24 @@ class PathFollowingEnv(gym.Env):
             dtype=np.float32
         )
         
-        # self.action_space = spaces.Box(
-        #     low=np.array([0.0, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0, -1.0, 0.0, -1.0]),
-        #     high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        #     shape=(10,),
-        #     dtype=np.float32
-        # )
+        obs_size_new = 2 + 2 + 1 + 1    # Current pos (2), Goal pos (2), Agent theta (1), Relative theta (1)
+        lidar_mask_size = 360           # Number of LiDAR rays (360)
 
-        # Obs: [
-        #   current_x, current_y,                   # Current position (2)
-        #   goal_x, goal_y,                         # Final goal position (2)
-        #   next_waypoints (chunk_size * 2),        # Next waypoints in path (chunk_size * 2)
-        #   distance_to_goal,                       # Scalar distance to final goal (1)
-        #   distance_to_next_waypoint               # Scalar distance to next waypoint (1)
-        #   Timestep t                              # Timestep (1)
-        # ]
-
-        # obs_size = self.start.shape[-1] + self.goal_pos.shape[-1] + (chunk_size * 2) + 3
-        obs_size_new = 2 + 2 + 2
-        self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(obs_size_new,),
-            dtype=np.float32
+        self.observation_space = spaces.Dict(
+            {
+                "vector": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(obs_size_new,),
+                    dtype=np.float32
+                    ),
+                "lidar_mask": spaces.Box(
+                    low=0,
+                    high=1,
+                    shape=(lidar_mask_size,),
+                    dtype=np.float32,
+                ),
+            }
         )
 
         self.path_manager = PathManager(self.image_path, chunk_size=chunk_size)
@@ -131,9 +122,9 @@ class PathFollowingEnv(gym.Env):
             wandb.define_metric("boundary_penalty", step_metric="RL_step")
             wandb.define_metric("total_reward", step_metric="RL_step")
             wandb.define_metric("goal_potential", step_metric="RL_step")
-            wandb.define_metric("path_potential", step_metric="RL_step")
+            # wandb.define_metric("path_potential", step_metric="RL_step")
             wandb.define_metric("progress", step_metric="RL_step")
-            wandb.define_metric("path_following", step_metric="RL_step")
+            # wandb.define_metric("path_following", step_metric="RL_step")
             wandb.define_metric("heading", step_metric="RL_step")
             wandb.define_metric("oscillation_penalty", step_metric="RL_step")
         else:
@@ -181,11 +172,10 @@ class PathFollowingEnv(gym.Env):
         self.goal_pos = self.gen_bot_pos()
         # self.goal_pos = np.array([7, 7])
 
-
         # Reset path manager and plan new path
-        self.path_manager.reset()
-        self.path_manager.plan_new_path(self.current_pos, self.goal_pos)
-        self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
+        # self.path_manager.reset()
+        # self.path_manager.plan_new_path(self.current_pos, self.goal_pos)
+        # self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
 
         self.reward_manager.reset()
         
@@ -196,30 +186,15 @@ class PathFollowingEnv(gym.Env):
         self.global_step += 1
         self.episode_length += 1
 
-        self.lidar_points, lidar_dists = get_lidar_points(
-            self.binary_img,
-            self.current_pos,
-            self.env_world_limits,
-            num_rays=360,
-            max_range=4.0
-        )
-        # print(self.lidar_points.shape)
-
-        in_actions = np.array([action[0], np.rad2deg(action[1]*self.max_theta)])
-
-        proposed_action = self.collision_avoidance(self.current_pos, lidar_dists, in_actions, 2, debug=False)
-        proposed_action[1] = np.deg2rad(proposed_action[1])/self.max_theta
-        print(f"Action change: {action} -> {proposed_action}, with a diff of {proposed_action - action}")
-
-        old_pos = self.action_to_pos(action)
-        new_pos = self.action_to_pos(proposed_action)
-        print(f"Position change: {old_pos} -> {new_pos}, with a diff of {new_pos - old_pos}")
+        pos = self.action_to_pos(action)
 
         self.prev_pos = self.current_pos
-        self.current_pos = new_pos
-        self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
+        self.current_pos = pos
+        # self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
         
         observation = self._get_observation()
+
+        # print(f"Step: {self.current_step}, Action: {action}, Vector: {observation['vector'].shape}, Lidar Mask: {observation['lidar_mask'].shape}")
         
         if self.wandb_enabled:
             wandb.log({"RL_step": self.global_step})
@@ -230,7 +205,6 @@ class PathFollowingEnv(gym.Env):
             current_pos=self.current_pos,
             prev_pos=self.prev_pos,
             goal_pos=self.goal_pos,
-            chunk=self.current_chunk,
             world_theta=self.agent_theta,
             timestep=self.current_step
         )
@@ -244,8 +218,8 @@ class PathFollowingEnv(gym.Env):
         info = {
             'episode_reward': self.episode_reward,
             'episode_length': self.episode_length,
-            'distance_to_goal': observation[-3],
-            'distance_to_next': observation[-2],
+            'Agent_Theta': observation['vector'][-2],
+            'Goal_Relative_Theta': observation['vector'][-1],
             'action_linear': action[0],
             'action_angular': action[1],
             'reward_components': reward_components,
@@ -260,7 +234,7 @@ class PathFollowingEnv(gym.Env):
         if goal_dist < 0.1:
             done = True
             success_reward = self.reward_manager.GOAL_REACHED_REWARD
-            reward += success_reward
+            reward = success_reward
             info['success'] = True
             reward_components['success_reward'] = success_reward
             wandb.log({"Goal Reached": 1}) if self.wandb_enabled else None
@@ -271,7 +245,7 @@ class PathFollowingEnv(gym.Env):
         if self.current_step >= self.max_episode_steps:
             truncated = True
             timeout_penalty = self.reward_manager.TIMEOUT_PENALTY
-            reward += timeout_penalty
+            reward = timeout_penalty
             info['timeout'] = True
             reward_components['timeout_penalty'] = timeout_penalty
             wandb.log({"Timeout": 1}) if self.wandb_enabled else None
@@ -282,7 +256,7 @@ class PathFollowingEnv(gym.Env):
         if self.reward_manager.out_of_boundary_penalty(self.current_pos) < 0.0:
             truncated = True
             boundary_penalty = self.reward_manager.BOUNDARY_PENALTY
-            reward += boundary_penalty
+            reward = boundary_penalty
             info['boundary'] = True
             reward_components['boundary_penalty'] = boundary_penalty
             wandb.log({"Boundary": 1}) if self.wandb_enabled else None
@@ -295,14 +269,13 @@ class PathFollowingEnv(gym.Env):
         if self.wandb_enabled:
             wandb.log(reward_components)
 
-        self.lidar_points, lidar_dists = get_lidar_points(
+        self.lidar_points, self.lidar_dists = get_lidar_points(
             self.binary_img,
             self.current_pos,
             self.env_world_limits,
             num_rays=360,
             max_range=4.0
         )
-
         if not self.headless:
             self.render()
         
@@ -313,53 +286,41 @@ class PathFollowingEnv(gym.Env):
         theta = action[1] * self.max_theta
         
         self.agent_theta += theta
-        self.agent_theta = ((self.agent_theta + np.pi) % (2*np.pi)) - np.pi
+        self.agent_theta = ((self.agent_theta + 2*np.pi) % (2*np.pi))
         self.prev_theta = theta
 
         return np.array([self.current_pos[0] + (L*np.cos(self.agent_theta)), self.current_pos[1] + (L*np.sin(self.agent_theta))])
     
     def _get_observation(self) -> np.ndarray:
-        dist_to_goal = np.linalg.norm(self.current_pos - self.goal_pos)
-        dist_to_next = np.linalg.norm(self.current_pos - self.current_chunk[0])
+        self.lidar_points, self.lidar_dists = get_lidar_points(
+            self.binary_img,
+            self.current_pos,
+            self.env_world_limits,
+            num_rays=360,
+            max_range=4.0
+        )
+        self.lidar_mask = get_safe_mask(self.lidar_dists, self.lidar_thresh)
         
-        if self.current_chunk.shape[0] != self.chunk_size:
-            fixed_chunk = np.zeros((self.chunk_size, 2))
-            
-            actual_points = min(self.current_chunk.shape[0], self.chunk_size)
-            fixed_chunk[:actual_points] = self.current_chunk[:actual_points]
-            
-            if actual_points < self.chunk_size:
-                fixed_chunk[actual_points:] = self.current_chunk[-1]
-                
-            self.current_chunk = fixed_chunk
-        
-        flat_chunk = (self.current_chunk / self.world_max).flatten()
         goal_vec = self.goal_pos - self.current_pos
         
-        # obs = np.concatenate([
-        #     self.current_pos / self.world_max,               # Current position (2)
-        #     self.goal_pos / self.world_max,                  # Goal position (2)
-        #     flat_chunk,                   # Waypoints (chunk_size * 2)
-        #     np.array([dist_to_goal / self.world_diag]),       # Distance to goal (1)
-        #     np.array([dist_to_next / self.world_diag]),       # Distance to next waypoint (1)
-        #     np.array([self.current_step / self.max_episode_steps])   # Timestep (1)
-        # ]).astype(np.float32)
-
-        obs = np.concatenate([
-            self.current_pos / self.world_max,               # Current position (2)
-            self.goal_pos / self.world_max,                  # Goal position (2)
-            np.array([self.agent_theta / np.pi]),
-            np.array([(np.arctan2(goal_vec[1], goal_vec[0]) - self.agent_theta) / np.pi])
-        ]).astype(np.float32)
+        obs = {
+            'vector' : np.concatenate([
+        self.current_pos / self.world_max,                                                      # Current position (2)
+            self.goal_pos / self.world_max,                                                     # Goal position (2)
+            np.array([self.agent_theta / (2*np.pi)]),                                           # Agent Theta (1)
+            np.array([(np.arctan2(goal_vec[1], goal_vec[0]) - self.agent_theta) / (2*np.pi)])   # Relative Goal Theta (1)
+            ]).astype(np.float32), 
+            'lidar_mask' : self.lidar_mask                                                      # LiDAR Mask (1,360)
+            }
         
-        # expected_size = 2 + 2 + (self.chunk_size * 2) + 3
-        expected_size = 2 + 2 + 2
-        assert obs.shape[0] == expected_size, f"Observation shape mismatch. Expected {expected_size}, got {obs.shape[0]}"
+        # print(f'observation lidar mask shape: {obs["lidar_mask"].shape}')
+        
+        expected_v_size = 2 + 2 + 1 + 1
+        expected_li_size = 360
+        assert obs['vector'].shape[0] == expected_v_size, f"Observation shape mismatch. Expected {expected_v_size}, got {obs['vector'].shape[0]}"
+        assert obs['lidar_mask'].shape[0] == expected_li_size, f"Observation shape mismatch. Expected {expected_li_size}, got {obs['lidar_mask'].shape[0]}"
         
         return obs
-    
-    def get_cur_goal_pos(self):
-        return self.current_pos, self.goal_pos
 
     def render(self):
         if self.render_type == "dual":
@@ -563,9 +524,9 @@ class PathFollowingEnv(gym.Env):
                         # f"Timeout: {self.reward_manager.monitor.histories['timeout_penalty'][-1] if len(self.reward_manager.monitor.histories['timeout_penalty']) > 0 else 0:.2f}",
                         # f"Boundary: {self.reward_manager.monitor.histories['boundary_penalty'][-1] if len(self.reward_manager.monitor.histories['boundary_penalty']) > 0 else 0:.2f}",
                         f"Goal Potential: {self.reward_manager.monitor.histories['goal_potential'][-1] if len(self.reward_manager.monitor.histories['goal_potential']) > 0 else 0:.2f}",
-                        f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1] if len(self.reward_manager.monitor.histories['path_potential']) > 0 else 0:.2f}",
+                        # f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1] if len(self.reward_manager.monitor.histories['path_potential']) > 0 else 0:.2f}",
                         f"Progress: {self.reward_manager.monitor.histories['progress'][-1] if len(self.reward_manager.monitor.histories['progress']) > 0 else 0:.2f}",
-                        f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1] if len(self.reward_manager.monitor.histories['path_following']) > 0 else 0:.2f}",
+                        # f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1] if len(self.reward_manager.monitor.histories['path_following']) > 0 else 0:.2f}",
                         f"Heading: {self.reward_manager.monitor.histories['heading'][-1] if len(self.reward_manager.monitor.histories['heading']) > 0 else 0:.2f}",
                         f"Oscillation: {self.reward_manager.monitor.histories['oscillation_penalty'][-1] if len(self.reward_manager.monitor.histories['oscillation_penalty']) > 0 else 0:.2f}",
                         f"Total: {self.reward_manager.monitor.histories['total_reward'][-1] if len(self.reward_manager.monitor.histories['total_reward']) > 0 else 0:.2f}"
@@ -676,9 +637,9 @@ class PathFollowingEnv(gym.Env):
                     reward_text = [
                         "Reward Components:",
                         f"Goal Potential: {self.reward_manager.monitor.histories['goal_potential'][-1] if len(self.reward_manager.monitor.histories['goal_potential']) > 0 else 0:.2f}",
-                        f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1] if len(self.reward_manager.monitor.histories['path_potential']) > 0 else 0:.2f}",
+                        # f"Path Potential: {self.reward_manager.monitor.histories['path_potential'][-1] if len(self.reward_manager.monitor.histories['path_potential']) > 0 else 0:.2f}",
                         f"Progress: {self.reward_manager.monitor.histories['progress'][-1] if len(self.reward_manager.monitor.histories['progress']) > 0 else 0:.2f}",
-                        f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1] if len(self.reward_manager.monitor.histories['path_following']) > 0 else 0:.2f}",
+                        # f"Path Following: {self.reward_manager.monitor.histories['path_following'][-1] if len(self.reward_manager.monitor.histories['path_following']) > 0 else 0:.2f}",
                         f"Heading: {self.reward_manager.monitor.histories['heading'][-1] if len(self.reward_manager.monitor.histories['heading']) > 0 else 0:.2f}",
                         f"Oscillation: {self.reward_manager.monitor.histories['oscillation_penalty'][-1] if len(self.reward_manager.monitor.histories['oscillation_penalty']) > 0 else 0:.2f}",
                         f"Total: {self.reward_manager.monitor.histories['total_reward'][-1] if len(self.reward_manager.monitor.histories['total_reward']) > 0 else 0:.2f}"
@@ -801,167 +762,3 @@ class PathFollowingEnv(gym.Env):
 
         # return np.array([0.0, 0.0])
         return new_pos
-
-    def adjust_direction(self, lidar_points, proposed_displacement, n):
-        """
-        Adjust the proposed (linear, angular) displacement to avoid obstacles.
-
-        Args:
-            lidar_points (np.ndarray): Array of shape (B, 360) with LiDAR obstacle distances.
-                A reading of 0 means no obstacle. If a single sample is provided,
-                it is automatically expanded to shape (1, 360).
-            proposed_displacement (np.ndarray): Array of shape (B, 2) representing the [linear, angular]
-                displacement in degrees (with theta already in [0, 360)). If a single sample is provided,
-                it is automatically expanded to shape (1, 2).
-            n (int): Safety margin in degrees (±n around the proposed angle).
-
-        Returns:
-            np.ndarray: Adjusted displacement as an array of shape (B, 2) with angular values in [0,360).
-                        In the case of a single sample input, a 1D array is returned.
-        """
-        import numpy as np
-
-        # Ensure inputs are batched. If the proposed displacement is a single vector, expand dims.
-        single_action = False
-        if proposed_displacement.ndim == 1:
-            proposed_displacement = np.expand_dims(proposed_displacement, axis=0)
-            single_action = True
-        if lidar_points.ndim == 1:
-            lidar_points = np.expand_dims(lidar_points, axis=0)
-
-        # If batch sizes do not match and lidar_points has one sample, repeat it.
-        if lidar_points.shape[0] != proposed_displacement.shape[0]:
-            if lidar_points.shape[0] == 1:
-                lidar_points = np.repeat(lidar_points, proposed_displacement.shape[0], axis=0)
-            else:
-                raise ValueError("Mismatched batch sizes between lidar_points and proposed_displacement")
-
-        # Now, lidar_points: (B, 360) and proposed_displacement: (B, 2)
-        L = proposed_displacement[:, 0]
-        # Ensure theta is in [0,360) (we assume the proposed theta is already in degrees)
-        theta = proposed_displacement[:, 1] % 360
-
-        # Adjust theta if linear displacement is negative.
-        abs_L = np.abs(L)
-        # For negative L, add 180° to the angle.
-        theta = np.where(L < 0, (theta + 180) % 360, theta)
-
-        # Use the rounded (integer) angle for indexing.
-        theta_round = np.round(theta).astype(int) % 360
-        window_offsets = np.arange(-n, n + 1)
-        # For each sample, compute safety window indices (shape: (B, 2n+1))
-        indices = (theta_round[:, None] + window_offsets) % 360
-
-        # Take LiDAR readings along the safety window.
-        readings = np.take_along_axis(lidar_points, indices, axis=1)
-        # A reading is unsafe if it is greater than 0 but less than or equal to 1.5 times the absolute displacement.
-        is_proposed_safe = ~((readings > 0) & (readings <= 1.5 * abs_L[:, None])).any(axis=1)
-
-        # Prepare output arrays.
-        new_L = L.copy()
-        new_theta = theta.copy()
-
-        # For unsafe samples, search for a safe candidate.
-        unsafe = np.where(~is_proposed_safe)[0]
-        if unsafe.size > 0:
-            candidate_angles = np.arange(360)
-            candidate_windows = (candidate_angles[:, None] + window_offsets) % 360  # shape: (360, 2n+1)
-            for i in unsafe:
-                lidar_row = lidar_points[i]  # shape: (360,)
-                # Get candidate window readings from the LiDAR row.
-                candidate_readings = lidar_row[candidate_windows]  # shape: (360, 2n+1)
-                candidate_safe = ~((candidate_readings > 0) & (candidate_readings <= 1.5 * abs_L[i])).any(axis=1)
-
-                if not candidate_safe.any():
-                    # No candidate found: reduce the linear displacement.
-                    new_L[i] = new_L[i] / 2
-                    print("no path found")
-                else:
-                    # Find candidate angles closest to the proposed angle.
-                    diff = np.abs(candidate_angles - theta[i])
-                    diff = np.minimum(diff, 360 - diff)
-                    diff[~candidate_safe] = 360
-                    best_angle = candidate_angles[np.argmin(diff)]
-                    new_theta[i] = best_angle % 360
-
-        # If any updated linear displacement is negative, adjust the angle accordingly.
-        new_theta = np.where(new_L < 0, (new_theta - 180) % 360, new_theta)
-        result = np.stack([new_L, new_theta % 360], axis=1)
-        if single_action:
-            return result[0]  # Return single action as 1D array.
-        return result
-
-    def collision_avoidance(self, current_pos, lidar_dists, action, safe_distance=1.0, search_range=30, angle_step=5, debug=False):
-        """
-        Simple collision avoidance function.
-        
-        The function assumes that the LiDAR distances are provided in a 1D array with 360 elements,
-        where each index corresponds to the distance reading (in world units) at that degree.
-        
-        The proposed action is given as [linear, angular] where:
-          - linear is the proposed step (e.g., in world units),
-          - angular is the desired heading in degrees (0-359).
-        
-        If the LiDAR reading at the proposed angle is lower than safe_distance, the function searches 
-        within ±search_range (in increments of angle_step) for a direction that is safe.
-        
-        Args:
-            current_pos (np.ndarray): The agent's current (x,y) position in the world (not used in the logic, 
-                                      but available if needed).
-            lidar_dists (np.ndarray): 1D array of LiDAR distances with shape (360,). Each index corresponds 
-                                      to the LiDAR reading at that degree.
-            action (np.ndarray): Proposed action as [linear, angular] (angular value in degrees).
-            safe_distance (float): Minimum clearance required (in world units).
-            search_range (int): Degrees to search to the left and right of the proposed direction.
-            angle_step (int): Increment (in degrees) used when searching for a safe direction.
-            debug (bool): If True, prints debugging information.
-        
-        Returns:
-            np.ndarray: Adjusted action as [linear, angular]. If no safe candidate is found, the linear 
-                        component is set to 0.
-        """
-        # Ensure the proposed angular component is in [0, 360)
-        proposed_linear = action[0]
-        proposed_angle = action[1] % 360
-
-        if debug:
-            print(f"Proposed action: linear = {proposed_linear}, angle = {proposed_angle}°")
-            print(f"Clearance at proposed angle ({proposed_angle}°): {lidar_dists[int(round(proposed_angle))]}")
-
-        # Check if the proposed direction is safe.
-        if lidar_dists[int(round(proposed_angle))] >= safe_distance:
-            if debug:
-                print("Proposed direction is safe.")
-            return action
-
-        # Search for a safe direction within ±search_range.
-        candidate_angle = None
-        for offset in range(0, search_range + 1, angle_step):
-            # Check left direction.
-            left_angle = (proposed_angle - offset) % 360
-            clearance_left = lidar_dists[int(round(left_angle))]
-            # Check right direction.
-            right_angle = (proposed_angle + offset) % 360
-            clearance_right = lidar_dists[int(round(right_angle))]
-
-            if debug:
-                print(f"Checking offset {offset}°:")
-                print(f"    Left angle {left_angle}° clearance = {clearance_left}")
-                print(f"    Right angle {right_angle}° clearance = {clearance_right}")
-
-            if clearance_left >= safe_distance or clearance_right >= safe_distance:
-                # Choose the candidate with higher clearance.
-                candidate_angle = left_angle if clearance_left >= clearance_right else right_angle
-                if debug:
-                    print(f"Safe candidate found at {candidate_angle}°")
-                break
-
-        new_action = action.copy()
-        if candidate_angle is None:
-            if debug:
-                print("No safe candidate found. Stopping movement.")
-            new_action[0] = 0.0  # Reduce forward motion if no safe path found
-        else:
-            new_action[1] = candidate_angle
-
-        return new_action

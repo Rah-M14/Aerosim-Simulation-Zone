@@ -104,7 +104,7 @@ def process_safe_angles(lidar_dists, bot_orientation, threshold, num_rays=360,
             scan = scan[:num_rays]
         angles_deg = np.linspace(0, 360, num_rays, endpoint=False)
         
-        finite_mask = (scan > threshold) & (~np.isinf(scan))
+        finite_mask = (scan > threshold) & ~np.isinf(scan) 
         infinite_mask = np.isinf(scan)
         
         finite_groups = group_angle_ranges(angles_deg, finite_mask, min_len=finite_min_len)
@@ -192,6 +192,56 @@ def process_safe_angles(lidar_dists, bot_orientation, threshold, num_rays=360,
     
     return ic, fc, ib, fb
 
+def get_safe_mask(lidar_dists, threshold, num_rays=360):
+    scan = np.asarray(lidar_dists)
+    
+    # if len(scan.shape) > 1 and scan.shape[1] != num_rays:
+        # scan = scan[:, :num_rays]
+    
+    finite_mask = (scan > threshold)
+
+    return finite_mask
+
+# def get_safe_mask(lidar_dists, threshold, num_rays=360, window_size=5):
+#     """
+#     Determine if each window of angles is free or occupied.
+
+#     Args:
+#         lidar_dists (np.ndarray): 1D or 2D array of LiDAR distances.
+#         threshold (float): Distance threshold.
+#         num_rays (int): Number of rays (default 360).
+#         window_size (int): Size of the sliding window.
+
+#     Returns:
+#         np.ndarray: Boolean array where True indicates the window is free.
+#     """
+#     scan = np.asarray(lidar_dists)
+    
+#     # Create a mask for distances above the threshold
+#     finite_mask = (scan > threshold)
+    
+#     # Use a sliding window approach to check if all elements in each window are free
+#     # Create a cumulative sum array
+#     cumsum = np.cumsum(finite_mask, axis=-1, dtype=int)
+#     # print(f"cumsum: {cumsum}")
+    
+#     # Calculate the number of True values in each window
+#     # Use np.pad to handle the initial window
+#     padded_cumsum = np.pad(cumsum, ((0, 0), (window_size - 1, 0)), 'constant')
+#     # print(f"padded sim: {padded_cumsum}")
+#     window_sums = padded_cumsum[..., window_size:] - padded_cumsum[..., :-window_size]
+#     # print(f"Window Sum: {window_sums}")
+    
+#     # A window is free if all elements in the window are above the threshold
+#     free_windows = (window_sums == window_size)
+    
+#     # Ensure padding width is non-negative
+#     pad_width = max(0, num_rays - free_windows.shape[-1])
+#     free_windows = np.pad(free_windows, ((0, 0), (0, pad_width)), 'constant', constant_values=False)
+#     # print(f"Free windows: {free_windows}" )
+    
+#     return free_windows
+        
 def plot_safe_angles_on_image(binary_img, sensor_pos, world_limits, threshold, bot_orientation, num_rays=360, max_range=4.0):
     """
     Vectorized LiDAR scan plotting and processing: plots safe angles on the binary image,

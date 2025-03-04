@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 import cv2
-
 import numpy as np
 
 def get_lidar_points(binary_img, current_pos_batch, world_limits, num_rays=360, max_range=4.0):
@@ -128,6 +127,18 @@ def get_lidar_points(binary_img, current_pos_batch, world_limits, num_rays=360, 
 
     return contact_points, lidar_dists
 
+def get_safe_mask(lidar_dists, threshold, num_rays=360):
+    scan = np.asarray(lidar_dists)
+    finite_mask = (scan > threshold)
+    return finite_mask
+
+def create_binary_image(image_path):
+    from PIL import Image
+    img = np.array(Image.open(image_path).convert('L'))  # Convert to grayscale
+    binary_img = (img > 128).astype(np.uint8)  # Threshold to create a binary map
+    binary_img = cv2.resize(binary_img, (0,0), fx=0.25, fy=0.25)
+    return binary_img
+
 def create_synthetic_binary_image():
     """
     Create a 200x200 synthetic binary image with a square obstacle in the center.
@@ -149,7 +160,7 @@ def main():
     scale_y = height / world_height
 
     # Define batch sizes to test.
-    batch_sizes = [128, 256, 512, 1024, 2048]
+    batch_sizes = [1, 128, 256, 512, 1024, 2048]
     times_taken = []
     sample_result = {}  # To store one sample sensor's result from the first batch.
 
@@ -161,6 +172,9 @@ def main():
         start_time = time.time()
         contacts, dists = get_lidar_points(binary_img, sensors, world_limits,
                                                    num_rays=360, max_range=4.0)
+        
+        mask = get_safe_mask(dists, threshold=3.0)
+        print(f"Mask: type={type(mask)}, shape={mask.shape}, dtype={mask.dtype}")
         elapsed = time.time() - start_time
         times_taken.append(elapsed)
         print(f"Batch size {batch}: Time taken: {elapsed:.6f} seconds")
@@ -199,5 +213,74 @@ def main():
     plt.tight_layout()
     plt.show()
 
+###############################################################################
+# New functionality: find angles with a LiDAR distance greater than a threshold.
+###############################################################################
+
+# def find_angles_with_distance_above_threshold(binary_img, sensor_pos, world_limits, threshold, num_rays=360, max_range=4.0):
+#     """
+#     Perform a LiDAR scan for a single sensor, and find the scanning angles (in degrees)
+#     where the measured LiDAR distance is greater than the given threshold.
+
+#     Args:
+#         binary_img (np.ndarray): Binary image (2D array), where 0 indicates obstacle and 1 indicates free space.
+#         sensor_pos (np.ndarray): Array-like of shape (2,) for the sensor's (x, y) position in world coordinates.
+#         world_limits (np.ndarray): Array with shape (2, 2) defining the world limits as [[min_x, max_x], [min_y, max_y]].
+#         threshold (float): The distance threshold in world units.
+#         num_rays (int): Number of rays to cast (default is 360).
+#         max_range (float): Maximum LiDAR range in world units (default is 4.0).
+
+#     Returns:
+#         valid_angles (np.ndarray): Array of angles (in degrees) for which the LiDAR measured distance exceeds the threshold.
+#         lidar_dists (np.ndarray): 1D array of LiDAR distances for each ray.
+#     """
+#     # Run the LiDAR scan for the single sensor.
+#     _, lidar_dists = get_lidar_points(binary_img, sensor_pos, world_limits, num_rays=num_rays, max_range=max_range)
+    
+#     # Generate ray angles in degrees.
+#     angles_deg = np.linspace(0, 360, num_rays, endpoint=False)
+    
+#     # Find all angles where the LiDAR distance is greater than the threshold.
+#     valid_indices = np.where(lidar_dists > threshold)[0]
+#     valid_angles = angles_deg[valid_indices]
+    
+#     return valid_angles, lidar_dists
+
+# def demo_find_angles():
+#     """
+#     Demonstrate the use of find_angles_with_distance_above_threshold.
+#     This demo scans the world from a single sensor at (0,0) and highlights
+#     the angles where the LiDAR distance is greater than the threshold.
+#     """
+#     # Create a synthetic binary image with a square obstacle.
+#     # binary_img = create_synthetic_binary_image()
+#     binary_img = create_binary_image(image_path=r"F:\Aerosim-Simulation-Zone\Try\New_WR_World.png")
+#     # Define world limits.
+#     world_limits = np.array([[-10, 10], [-8, 8]])
+#     # Set the sensor position. Adjust as needed.
+#     sensor_pos = np.array([5.0, -3.0])
+#     # Define the distance threshold.
+#     threshold = 3.0
+    
+#     valid_angles, lidar_dists = find_angles_with_distance_above_threshold(
+#         binary_img, sensor_pos, world_limits, threshold, num_rays=360, max_range=4.0)
+
+#     print("Angles (in degrees) where LiDAR distance is greater than threshold:")
+#     print(valid_angles)
+    
+#     # For visualization, create a polar plot.
+#     angles_rad = np.linspace(0, 2*np.pi, 360, endpoint=False)
+#     fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8, 6))
+#     ax.plot(angles_rad, lidar_dists, 'b.', label='LiDAR Distances')
+    
+#     valid_indices = np.where(lidar_dists > threshold)[0]
+#     ax.plot(angles_rad[valid_indices], lidar_dists[valid_indices], 'ro', 
+#             label=f'Distance > {threshold}')
+    
+#     ax.set_title("LiDAR Scan in Polar Coordinates")
+#     ax.legend(loc="upper right")
+#     plt.show()
+
 if __name__ == "__main__":
     main()
+#     demo_find_angles()

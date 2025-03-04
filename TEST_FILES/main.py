@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from stable_baselines3 import SAC, PPO, TD3
+from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.monitor import Monitor
@@ -16,8 +17,9 @@ from tqdm.auto import tqdm
 
 from env import PathFollowingEnv
 from configs import ObservationConfig
-from feature_ex import SocialNavigationExtractor
+from feature_ex import *
 
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 obs_config = ObservationConfig()
 
 class ProgressBarCallback(BaseCallback):
@@ -69,7 +71,7 @@ class CkptAutoRemovalCallback(BaseCallback):
 
 def make_env(algo, enable_reward_monitor: bool = False, enable_wandb: bool = False, render_type: str = "normal"):
     env = PathFollowingEnv(
-        image_path=r"TEST_FILES\New_WR_World.png",
+        image_path=r"F:\Aerosim-Simulation-Zone\TEST_FILES\World_Map.png",
         algo_run=algo,
         max_episode_steps=obs_config.max_episode_steps,
         chunk_size=obs_config.chunk_size,
@@ -120,8 +122,8 @@ def main(args):
                 "train_freq": 1,
                 "gradient_steps": 1,
                 "learning_starts": 10000,
-                "policy_architecture": [256, 512, 512, 256],
-                "value_architecture": [256, 512, 512, 256],
+                "policy_architecture": [16],
+                "value_architecture": [16],
                 "total_timesteps": 10000000,
             }
         )
@@ -145,9 +147,11 @@ def main(args):
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True)
 
     policy_kwargs = dict(
+        features_extractor_class=NavigationNet,
+        features_extractor_kwargs=dict(features_dim=2),
         net_arch=dict(
-            pi=[16, 32, 64, 32, 16],
-            qf=[16, 32, 64, 32, 16]
+            pi=[16],
+            qf=[16]
         )
     )
 
@@ -202,7 +206,7 @@ def main(args):
             )
         elif algorithm == "PPO":
             model = PPO(
-                "MlpPolicy",
+                PPOMultiPolicy,
                 env,
                 learning_rate=3e-4,
                 verbose=1,
@@ -246,11 +250,31 @@ def main(args):
                 verbose=1
             )
 
-    original_action_net = model.policy.action_net
-    model.policy.action_net = nn.Sequential(
-        original_action_net,
-        nn.Tanh()
-    )
+    # original_action_net = model.policy.action_net
+    # model.policy.action_net = nn.Sequential(
+    #     original_action_net,
+    #     nn.Sigmoid()
+    # )
+
+    # feature_ex = model.policy.features_extractor
+    # print(f"TEST PRINT: FEATURE EXTRACTOR: {feature_ex}")
+
+    pretrained_fe_path = r"F:\Aerosim-Simulation-Zone\Try\FIGS_Bound\checkpoint_epoch_24000.pth"
+    pretrained_state_dict = torch.load(pretrained_fe_path, weights_only=False)
+
+    # print(f"TEST PRINT: PRETRAINED STATE DICT: {pretrained_state_dict.state_dict().keys()}")
+    model.policy.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+
+    for param in model.policy.features_extractor.parameters():
+        param.requires_grad = False
+        
+    # check if all the model weights are frozen
+    # for name, param in model.policy.features_extractor.named_parameters():
+        # print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+
+    model.policy.features_extractor.eval()
+
+    print(f"TEST PRINT: MODEL POLICY: {model.policy}")
         
     # Print complete model architecture
     print("\n=== Complete Model Architecture ===")
@@ -322,14 +346,15 @@ def main(args):
         ),
         CkptAutoRemovalCallback(model_dir, algorithm, keep_num=3, frequency=50000),
         WandbCallback(enable_wandb=args.wandb_log),
-        ProgressBarCallback(total_timesteps)
+        # ProgressBarCallback(total_timesteps)
     ]
 
     try:
         model.learn(
             total_timesteps=total_timesteps,
             callback=callbacks,
-            log_interval=10
+            log_interval=10,
+            progress_bar=True
         )
 
         final_model_path = f"{model_dir}/final_model_{algorithm}"
@@ -401,7 +426,7 @@ def evaluate_model(args, num_episodes=100):
             )
     elif algo == "PPO":
             model = PPO(
-                "MlpPolicy",
+                PPOMultiPolicy,
                 env,
                 learning_rate=3e-4,
                 verbose=1,

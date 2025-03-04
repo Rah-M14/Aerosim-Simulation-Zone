@@ -1,83 +1,77 @@
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from gymnasium import spaces
 
-class SocialNavigationExtractor(nn.Module):
-    def __init__(self, lidar_points=360, path_points=10, social_features=8):
-        super().__init__()
-        
-        # LiDAR Processing Branch (Collision Awareness)
-        self.lidar_encoder = nn.Sequential(
-            nn.Conv1d(1, 32, kernel_size=5, stride=2),
+from stable_baselines3 import PPO
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+
+class NavigationNet(BaseFeaturesExtractor):
+    """
+    :param observation_space: (gym.Space)
+    :param features_dim: (int) Number of features extracted.
+        This corresponds to the number of unit for the last layer.
+    """
+    def __init__(self, observation_space: spaces.Box, features_dim: int = 256):
+        super().__init__(observation_space, features_dim)
+        n_input_channels = observation_space['vector'].shape[0]
+
+        self.features = nn.Sequential(
+            nn.Linear(n_input_channels, 16),  # New input: [bot_x, bot_y, goal_x, goal_y, world_theta, relative_theta]
             nn.ReLU(),
-            nn.Conv1d(32, 64, kernel_size=3, stride=2),
+            nn.Linear(16, 32),
             nn.ReLU(),
-            nn.AdaptiveMaxPool1d(16)
-        )
-        
-        # Path Following Branch
-        self.path_encoder = nn.Sequential(
-            nn.Linear(path_points * 2, 128),
+            nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 16),
             nn.ReLU()
         )
-        
-        # Goal and Progress Branch
-        self.goal_encoder = nn.Sequential(
-            nn.Linear(4, 32),  # Current pos + goal pos
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU()
+        self.linear_head = nn.Sequential(
+            nn.Linear(16, 1),
+            nn.Sigmoid()  # L will be in [0,1]
         )
-        
-        # Attention for Path-LiDAR Integration
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=64,
-            num_heads=4,
-            batch_first=True
+        self.angular_head = nn.Sequential(
+            nn.Linear(16, 1),
+            nn.Sigmoid()  # delta_theta will be in [0,1]
         )
+        self.distance_temp = torch.tensor(2)
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        """
+        vector: [6] (input features)
+        lidar_mask: [360] (input features)
+        """        
+        raw_output = self.features(observations['vector'])
+        L = self.linear_head(raw_output).squeeze(-1)  # [0,1] magnitude
+        theta_raw = (self.angular_head(raw_output).squeeze(-1) * (2 * torch.pi)) % (2 * torch.pi)  # [0, 2π]
+
+        # print(f"L: {L.shape}, L_value: {L}, theta_raw: {theta_raw.shape}, Theta_Raw: {theta_raw}")
+
+        theta_deg = torch.rad2deg(theta_raw)
+        theta_bin = theta_deg.long()
+        all_bins = torch.arange(360, device=observations['vector'].device)
+        bin_distances = torch.abs(all_bins.float() - theta_bin)
+
+        # print(f"all_bins: {all_bins.shape}, bin_distances: {bin_distances.shape}, theta_bin: {theta_bin.shape}")
         
-        # Final Integration Layer
-        self.integration = nn.Sequential(
-            nn.Linear(64 + 64 + 32, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128)
-        )
-        
-        self.layernorm = nn.LayerNorm(64)
-        
-    def forward(self, observations):
-        lidar = observations[-1].unsqueeze(1)  # [_, 1, 360]
-        path = observations[4:28]  # [_, P*2]
-        current_pos = observations[:2]  # [_, 2]
-        goal_pos = observations[2:4]  # [_, 2]
-        
-        # Process LiDAR data
-        lidar_features = self.lidar_encoder(lidar)  # [_, 64, 16]
-        lidar_features = lidar_features.transpose(1, 2)  # [_, 16, 64]
-        
-        # Process path data
-        path_features = self.path_encoder(path)  # [_, 64]
-        path_features = path_features.unsqueeze(1)  # [_, 1, 64]
-        
-        # Cross-attention between path and LiDAR
-        path_aware_features, _ = self.cross_attention(
-            path_features,
-            lidar_features,
-            lidar_features
-        )
-        path_aware_features = self.layernorm(path_aware_features.squeeze(1))
-        
-        # Process goal and current position
-        goal_features = self.goal_encoder(
-            torch.cat([current_pos, goal_pos], dim=-1)
-        )
-        
-        # Integrate all features
-        combined_features = torch.cat([
-            path_aware_features,
-            lidar_features.mean(dim=1),  # Global LiDAR context
-            goal_features
-        ], dim=-1)
-        
-        return self.integration(combined_features)
+        safe_weights = F.softmax(-bin_distances / self.distance_temp, dim=-1)
+        safe_weights = safe_weights * observations['lidar_mask']  # Zero out unsafe
+        safe_probs = F.gumbel_softmax(safe_weights.log(), tau=0.5, hard=True)
+
+        # print(f"safe_weights: {safe_weights.shape}, safe_probs: {safe_probs.shape}")
+
+        nearest_bin = torch.argmax(safe_probs, dim=-1)
+        theta_safe_deg = (nearest_bin.float())
+        theta_safe = torch.deg2rad(theta_safe_deg)
+
+        # print(f"nearest_bin: {nearest_bin.shape}, theta_safe: {theta_safe.shape}")
+    
+        confidence = 1 / (1 + bin_distances.gather(-1, nearest_bin))
+        final_theta = confidence * theta_raw + (1 - confidence) * theta_safe
+
+        # print(f"confidence: {confidence.shape}, final_theta: {final_theta.shape}")
+
+        return torch.stack([L, final_theta], dim=-1)

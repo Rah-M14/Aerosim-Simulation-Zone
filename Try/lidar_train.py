@@ -457,7 +457,7 @@ binary_img = create_binary_image(image_path=r"F:\Aerosim-Simulation-Zone\Try\New
 # Define world boundaries (adjust as needed)
 world_limits = np.array([[-10, 10], [-8, 8]])
 batch_size = 512
-epochs = 15000
+epochs = 100000
 pbar = tqdm.tqdm(range(epochs), desc="Training", dynamic_ncols=True) 
 
 for epoch in pbar:

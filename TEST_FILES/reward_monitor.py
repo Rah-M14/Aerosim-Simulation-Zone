@@ -16,9 +16,9 @@ class RewardMonitor:
         self.histories = {
             'total_reward': deque(maxlen=history_length),
             'goal_potential': deque(maxlen=history_length),
-            'path_potential': deque(maxlen=history_length),
+            # 'path_potential': deque(maxlen=history_length),
             'progress': deque(maxlen=history_length),
-            'path_following': deque(maxlen=history_length),
+            # 'path_following': deque(maxlen=history_length),
             'heading': deque(maxlen=history_length),
             'oscillation_penalty': deque(maxlen=history_length)
         }
@@ -33,7 +33,7 @@ class RewardMonitor:
             'total_reward': self.fig.add_subplot(self.gs[0, :]),
             'potentials': self.fig.add_subplot(self.gs[1, 0]),
             'progress': self.fig.add_subplot(self.gs[1, 1]),
-            'path_following': self.fig.add_subplot(self.gs[1, 2]),
+            # 'path_following': self.fig.add_subplot(self.gs[1, 2]),
             'heading': self.fig.add_subplot(self.gs[2, 0]),
             'penalties': self.fig.add_subplot(self.gs[2, 1]),
             'reward_dist': self.fig.add_subplot(self.gs[2, 2])
@@ -60,7 +60,7 @@ class RewardMonitor:
         self.axes['potentials'].set_xlabel('Step')
         self.axes['potentials'].set_ylabel('Value')
         self.lines['goal_potential'] = self.axes['potentials'].plot([], [], 'r-', label='Goal Potential')[0]
-        self.lines['path_potential'] = self.axes['potentials'].plot([], [], 'g-', label='Path Potential')[0]
+        # self.lines['path_potential'] = self.axes['potentials'].plot([], [], 'g-', label='Path Potential')[0]
         self.axes['potentials'].legend()
         
         # Progress
@@ -70,10 +70,10 @@ class RewardMonitor:
         self.lines['progress'] = self.axes['progress'].plot([], [], 'g-')[0]
         
         # Path Following
-        self.axes['path_following'].set_title('Path Following Reward')
-        self.axes['path_following'].set_xlabel('Step')
-        self.axes['path_following'].set_ylabel('Value')
-        self.lines['path_following'] = self.axes['path_following'].plot([], [], 'b-')[0]
+        # self.axes['path_following'].set_title('Path Following Reward')
+        # self.axes['path_following'].set_xlabel('Step')
+        # self.axes['path_following'].set_ylabel('Value')
+        # self.lines['path_following'] = self.axes['path_following'].plot([], [], 'b-')[0]
         
         # Heading
         self.axes['heading'].set_title('Heading Alignment')
@@ -114,12 +114,12 @@ class RewardMonitor:
         
         # Update potential plots
         self.lines['goal_potential'].set_data(x, list(self.histories['goal_potential']))
-        self.lines['path_potential'].set_data(x, list(self.histories['path_potential']))
+        # self.lines['path_potential'].set_data(x, list(self.histories['path_potential']))
         self.axes['potentials'].relim()
         self.axes['potentials'].autoscale_view()
         
         # Update other components
-        for key in ['progress', 'path_following', 'heading']:
+        for key in ['progress', 'heading']:
             self.lines[key].set_data(x, list(self.histories[key]))
             self.axes[key].relim()
             self.axes[key].autoscale_view()

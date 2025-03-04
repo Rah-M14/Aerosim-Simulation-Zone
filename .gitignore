@@ -181,3 +181,6 @@ expert_data.csv
 logs/
 wandb/
 checkpoints/
+Try/FIGS/
+Try/FIGS_Bound/
+Try/FIGS_WIN/

@@ -87,10 +87,12 @@ def get_lidar_centres_tensor(sensor_pos, bot_orientation, binary_img, world_limi
         # Convert back to torch tensor (and copy sensor device if needed)
         lidar_tensor = torch.tensor(lidar_array, dtype=torch.float32)
         lidar_bounds = torch.tensor(lidar_c_bounds, dtype=torch.float32)
+        lidar_dists_tensor = torch.tensor(lidar_dists, dtype=torch.float32)
         if torch.is_tensor(sensor_pos):
             lidar_tensor = lidar_tensor.to(sensor_pos.device)
             lidar_bounds = lidar_bounds.to(sensor_pos.device)
-        return lidar_tensor, lidar_bounds
+            lidar_dists_tensor = lidar_dists_tensor.to(sensor_pos.device)
+        return lidar_tensor, lidar_bounds, lidar_dists_tensor
     else:
         # --- Batched version: sensor_pos has shape (batch,2) ---
         batch_size = sensor_pos.shape[0]
@@ -98,12 +100,12 @@ def get_lidar_centres_tensor(sensor_pos, bot_orientation, binary_img, world_limi
         lidar_bounds_list = []
         for i in range(batch_size):
             # Process each sample individually.
-            single_lidar, single_bounds = get_lidar_centres_tensor(sensor_pos[i],
+            single_lidar, single_bounds, op_dists = get_lidar_centres_tensor(sensor_pos[i],
                                                     bot_orientation[i] if torch.is_tensor(bot_orientation) else bot_orientation[i],
                                                     binary_img, world_limits, threshold, num_rays, max_range)
             lidar_list.append(single_lidar)
             lidar_bounds_list.append(single_bounds)
-        return torch.stack(lidar_list, dim=0), torch.stack(lidar_bounds_list, dim=0)
+        return torch.stack(lidar_list, dim=0), torch.stack(lidar_bounds_list, dim=0), op_dists
 
 
 ######################################################################
@@ -153,16 +155,11 @@ def simulate_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, w
         relative_theta = (relative_theta + torch.pi) % (2 * torch.pi) - torch.pi
 
         # --- Extract LiDAR centres and bounds ---
-        lidar_centres, lidar_bounds = get_lidar_centres_tensor(current_pos, relative_theta, binary_img, world_limits, threshold)
+        lidar_centres, lidar_bounds, lidar_dists = get_lidar_centres_tensor(current_pos, relative_theta, binary_img, world_limits, threshold)
         lidar_centres, lidar_bounds = (lidar_centres + np.pi) % (2 * np.pi) - np.pi, (lidar_bounds + np.pi) % (2 * np.pi) - np.pi
 
         # Get raw LiDAR distances - assuming get_lidar_points can be called here
         # (You'll need to modify this to work with your actual LiDAR data structure)
-        raw_lidar_distances = []
-        for i in range(batch_size):
-            pos_np = current_pos[i].detach().cpu().numpy()
-            _, distances = get_lidar_points(binary_img, pos_np, world_limits, num_rays=36, max_range=4.0)
-            raw_lidar_distances.append(torch.tensor(distances))
         
         # Compute minimum distance to obstacles for each sample
         min_distances = torch.stack([distances.min() for distances in raw_lidar_distances])
@@ -403,7 +400,7 @@ def evaluate_model_on_world(net, initial_pos, goal_pos, binary_img, world_limits
             relative_theta = (relative_theta + torch.pi) % (2 * torch.pi) - torch.pi
             
             # Extract LiDAR centres (using our batched-friendly version)
-            lidar_centres, lidar_bounds = get_lidar_centres_tensor(current_pos, theta, binary_img, world_limits, threshold=threshold)
+            lidar_centres, lidar_bounds, lidar_dists = get_lidar_centres_tensor(current_pos, theta, binary_img, world_limits, threshold=threshold)
             if lidar_centres.ndim == 1:
                 lidar_features = (lidar_centres / torch.pi).unsqueeze(0)
             else:
@@ -483,7 +480,7 @@ def plot_trajectory_with_collision(net, initial_pos, goal_pos, binary_img, world
             relative_theta = torch.remainder(relative_theta + torch.pi, 2 * torch.pi) - torch.pi
 
             # Get LiDAR centres from environment. This function handles both single and batched inputs.
-            lidar_centres, lidar_bounds = get_lidar_centres_tensor(current_pos, relative_theta, binary_img, world_limits, threshold)
+            lidar_centres, lidar_bounds, lidar_dists = get_lidar_centres_tensor(current_pos, relative_theta, binary_img, world_limits, threshold)
             lidar_centres, lidar_bounds = (lidar_centres + np.pi) % (2 * np.pi) - np.pi, (lidar_bounds + np.pi) % (2 * np.pi) - np.pi
 
             # Ensure lidar_features has the proper batch shape
