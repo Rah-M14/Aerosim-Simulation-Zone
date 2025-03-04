@@ -285,7 +285,7 @@ class PathFollowingEnv(gym.Env):
         L = action[0] * self.max_step_size
         theta = action[1] * self.max_theta
         
-        self.agent_theta += theta
+        self.agent_theta = theta
         self.agent_theta = ((self.agent_theta + 2*np.pi) % (2*np.pi))
         self.prev_theta = theta
 
@@ -302,13 +302,14 @@ class PathFollowingEnv(gym.Env):
         self.lidar_mask = get_safe_mask(self.lidar_dists, self.lidar_thresh)
         
         goal_vec = self.goal_pos - self.current_pos
+        rel_theta = ((((np.arctan2(goal_vec[1], goal_vec[0]) + 2 * np.pi) % (2 * np.pi)) - self.agent_theta) + 2 * np.pi) % (2 * np.pi)
         
         obs = {
             'vector' : np.concatenate([
         self.current_pos / self.world_max,                                                      # Current position (2)
             self.goal_pos / self.world_max,                                                     # Goal position (2)
             np.array([self.agent_theta / (2*np.pi)]),                                           # Agent Theta (1)
-            np.array([(np.arctan2(goal_vec[1], goal_vec[0]) - self.agent_theta) / (2*np.pi)])   # Relative Goal Theta (1)
+            np.array([rel_theta / (2*np.pi)])   # Relative Goal Theta (1)
             ]).astype(np.float32), 
             'lidar_mask' : self.lidar_mask                                                      # LiDAR Mask (1,360)
             }
