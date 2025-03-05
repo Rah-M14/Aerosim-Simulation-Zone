@@ -135,13 +135,16 @@ class RewardMonitor:
         self.axes['reward_dist'].hist(list(self.histories['total_reward']), bins=20)
         
         # Redraw
-        self.fig.canvas.draw()
         try:
             self.fig.canvas.draw()
-            plt.pause(0.001)
+            # plt.pause(0.001)
         except Exception as e:
             print(f"Error during canvas draw: {e}")
-        self.fig.canvas.flush_events()
+        try:
+            self.fig.canvas.draw_idle()
+            # plt.pause(0.001)
+        except Exception as e:
+            print(f"Error during canvas draw: {e}")
         
     def reset(self):
         """Reset histories for new episode"""

@@ -247,6 +247,7 @@ def main(args):
                 policy_delay=2,
                 target_policy_noise=0.2,
                 target_noise_clip=0.5,
+                policy_kwargs=policy_kwargs,
                 # optimize_memory_usage=True,
                 tensorboard_log="./tensorboard_logs/td3/",
                 verbose=1
