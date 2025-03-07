@@ -181,6 +181,7 @@ expert_data.csv
 logs/
 wandb/
 checkpoints/
+Checkpoints/
 TEST_FILES\__pycache__/
 TEST_FILES/__pycache__/
 Try\__pycache__/

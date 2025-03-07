@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import os
 import cv2
 from PIL import Image
+import torch
 
 from LiDAR_Fast import *
 from RRTStar import RRTStarPlanner, gen_goal_pose
@@ -20,7 +21,7 @@ from reward_monitor import RewardMonitor
 obs_config = ObservationConfig()
 
 class PathFollowingEnv(gym.Env):    
-    def __init__(self, image_path: str, algo_run: str, max_episode_steps: int = 1000, chunk_size: int = obs_config.chunk_size, headless: bool = False, 
+    def __init__(self, image_path: str, algo_run: str, max_episode_steps: int = 80, chunk_size: int = obs_config.chunk_size, headless: bool = False, 
     enable_reward_monitor: bool = False, enable_wandb: bool = False, render_type: str = "normal"):
         super().__init__()
         
@@ -70,8 +71,8 @@ class PathFollowingEnv(gym.Env):
         self.lidar_mask = None
 
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0]),
-            high=np.array([1.0, 1.0]),
+            low=np.array([0.0, 0.0]),
+            high=np.array([1.0, 2*np.pi]),
             shape=(2,),
             dtype=np.float32
         )
@@ -98,6 +99,7 @@ class PathFollowingEnv(gym.Env):
 
         self.path_manager = PathManager(self.image_path, chunk_size=chunk_size)
         self.reward_manager = RewardManager(self.agent_theta, monitor=None)
+        self.total_lc_rew = 0.0
         
         # Initialize reward monitor if enabled
         if enable_reward_monitor:
@@ -110,6 +112,7 @@ class PathFollowingEnv(gym.Env):
             wandb.define_metric("episode_num", step_metric="RL_step")
 
             wandb.define_metric("Learning Curve", step_metric="episode_num")
+            wandb.define_metric("Total_Learning_Curve", step_metric="episode_num")
             wandb.define_metric("episode_length", step_metric="episode_num")
 
             wandb.define_metric("Action_L", step_metric="RL_step")
@@ -160,10 +163,12 @@ class PathFollowingEnv(gym.Env):
             wandb.log({"episode_num": self.episode_num})
             wandb.log({"episode_length": self.episode_length})
             wandb.log({"Learning Curve": self.episode_reward})
+            wandb.log({"Total_Learning_Curve": self.total_lc_rew})
 
         # Reset internal counters
         self.current_step = 0
         self.episode_reward = 0
+        self.total_lc_rew = 0
         self.episode_num += 1
 
         self.current_pos = self.gen_bot_pos()
@@ -182,6 +187,9 @@ class PathFollowingEnv(gym.Env):
         return self._get_observation(), {}
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        # print(f"Action Received : {action}")
+
+        # print(f"Action Received : {action}")
         self.current_step += 1
         self.global_step += 1
         self.episode_length += 1
@@ -206,7 +214,8 @@ class PathFollowingEnv(gym.Env):
             prev_pos=self.prev_pos,
             goal_pos=self.goal_pos,
             world_theta=self.agent_theta,
-            timestep=self.current_step
+            timestep=self.current_step,
+            lidar_dists=self.lidar_dists
         )
         
         self.episode_reward += reward
@@ -265,6 +274,7 @@ class PathFollowingEnv(gym.Env):
             reward_components['boundary_penalty'] = 0.0
 
         reward_components['total_reward'] = reward
+        self.total_lc_rew += reward
 
         if self.wandb_enabled:
             wandb.log(reward_components)
@@ -282,8 +292,8 @@ class PathFollowingEnv(gym.Env):
         return observation, reward, done, truncated, info
     
     def action_to_pos(self, action: np.ndarray) -> np.ndarray:
-        L = action[0] * self.max_step_size
-        theta = action[1] * self.max_theta
+        L = action[0]
+        theta = action[1]
         
         self.agent_theta = theta
         self.agent_theta = ((self.agent_theta + 2*np.pi) % (2*np.pi))
@@ -300,6 +310,7 @@ class PathFollowingEnv(gym.Env):
             max_range=4.0
         )
         self.lidar_mask = get_safe_mask(self.lidar_dists, self.lidar_thresh)
+        self.lidar_mask = self.lidar_mask.astype(np.float32)
         
         goal_vec = self.goal_pos - self.current_pos
         rel_theta = ((((np.arctan2(goal_vec[1], goal_vec[0]) + 2 * np.pi) % (2 * np.pi)) - self.agent_theta) + 2 * np.pi) % (2 * np.pi)
@@ -540,7 +551,7 @@ class PathFollowingEnv(gym.Env):
 
                 # Show the combined image
                 cv2.imshow(f'Path Following Environment - {self.name}', combined_img)
-                cv2.waitKey(1000)
+                cv2.waitKey(1)
             
             except Exception as e:
                 print(f"Render error: {str(e)}")

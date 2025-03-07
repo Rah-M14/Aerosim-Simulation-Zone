@@ -10,10 +10,10 @@ class RewardManager:
         self.monitor = monitor
 
         # Core Rews
-        self.GOAL_REACHED_REWARD = 5000.0
-        self.BOUNDARY_PENALTY = -1000.0
-        self.TIMEOUT_PENALTY = -1000.0
-        self.LIVE_REWARD = -1.0
+        self.GOAL_REACHED_REWARD = 50.0
+        self.BOUNDARY_PENALTY = -self.GOAL_REACHED_REWARD
+        self.TIMEOUT_PENALTY = -self.GOAL_REACHED_REWARD
+        self.LIVE_REWARD = -5.0
         
         # Potential Components
         self.GAMMA = 0.99
@@ -47,17 +47,22 @@ class RewardManager:
         self.reward_history = []
         
     def compute_reward(self, current_pos: np.ndarray, prev_pos: np.ndarray, 
-                      goal_pos: np.ndarray, world_theta: float, timestep: int) -> float:
+                      goal_pos: np.ndarray, world_theta: float, timestep: int,
+                      lidar_dists: np.ndarray) -> float:
         reward = 0.0
         
         goal_pot_rew, goal_pot = self.goal_pot_rew(current_pos, goal_pos, timestep)
         
         progress_rew, progress = self.progress_rew(prev_pos, current_pos, goal_pos, timestep)
+        # progress_rew, progress = 0.0, 0.0
         heading_rew = self.heading_rew(current_pos, goal_pos, world_theta, timestep)
+        # heading_rew = 0.0
                 
         oscillation_penalty = self.oscillation_penalty(current_pos)
+        # oscillation_penalty = 0.0
+        coll_rew = self.collision_penalty(current_pos, lidar_dists, min_thresh=1.5)
 
-        reward = goal_pot_rew + progress_rew + heading_rew + oscillation_penalty + self.LIVE_REWARD 
+        reward = goal_pot_rew + progress_rew + heading_rew + oscillation_penalty + coll_rew + self.LIVE_REWARD 
         
         # History Update
         self.prev_goal_potential = goal_pot
@@ -72,7 +77,8 @@ class RewardManager:
             'goal_potential': goal_pot_rew,
             'progress': progress_rew,
             'heading': heading_rew,
-            'oscillation_penalty': oscillation_penalty
+            'oscillation_penalty': oscillation_penalty,
+            'collision_penalty': coll_rew
         }
         
         # Update the monitor if it exists
@@ -83,14 +89,15 @@ class RewardManager:
 
     def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
         current_goal_potential = self._goal_potential(current_pos, goal_pos)
-        if self.prev_goal_potential is None:
-            self.prev_goal_potential = current_goal_potential
-        diff = self.prev_goal_potential - current_goal_potential
+        return -current_goal_potential, current_goal_potential
+        # if self.prev_goal_potential is None:
+        #     self.prev_goal_potential = current_goal_potential
+        # diff = self.prev_goal_potential - current_goal_potential
 
-        if (timestep > 100 and diff <= 0):
-            return -current_goal_potential, current_goal_potential
-        else:
-            return -current_goal_potential + diff, current_goal_potential
+        # if (timestep > 100 and diff <= 0):
+        #     return -current_goal_potential, current_goal_potential
+        # else:
+        #     return -current_goal_potential + diff, current_goal_potential
 
     def progress_rew(self, prev_pos: np.ndarray, current_pos: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
         progress = self._compute_progress(prev_pos, current_pos, goal_pos)
@@ -111,6 +118,16 @@ class RewardManager:
             if detection['is_oscillating']:
                 penalty = detection['heading_variance'] + (detection['cumulative_curvature'] - 5)
             return (self.OSCILLATION_PENALTY_BASE * oscillation) - np.clip(penalty, 0.0, 100.0)
+        return 0.0
+    
+    def collision_penalty(self, current_pos: np.ndarray, lidar_dists: np.ndarray, min_thresh: float) -> float:
+        if len(lidar_dists) == 0:
+            print(f"Empty Lidar Dists")
+            return 0.0
+        min_dist = np.min(lidar_dists)
+        if min_dist < min_thresh:
+            coll_rew = np.clip(-5*np.exp(-(min_dist-min_thresh)), -np.inf, -5.0) + 5.0
+            return coll_rew
         return 0.0
     
     

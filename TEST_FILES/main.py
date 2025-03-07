@@ -5,6 +5,7 @@ import wandb
 import argparse
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 
 from stable_baselines3 import SAC, PPO, TD3
 from stable_baselines3.ppo import MultiInputPolicy as PPOMultiPolicy
@@ -73,7 +74,7 @@ class CkptAutoRemovalCallback(BaseCallback):
 
 def make_env(algo, enable_reward_monitor: bool = False, enable_wandb: bool = False, render_type: str = "normal"):
     env = PathFollowingEnv(
-        image_path=r"F:\Aerosim-Simulation-Zone\TEST_FILES\World_Map.png",
+        image_path="TEST_FILES/World_Map.png",
         algo_run=algo,
         max_episode_steps=obs_config.max_episode_steps,
         chunk_size=obs_config.chunk_size,
@@ -101,6 +102,22 @@ def get_checkpoint_path(model_dir, algorithm, checkpoint_type="latest"):
             return None
         checkpoint_path = max(checkpoints, key=os.path.getmtime)
     return checkpoint_path if os.path.exists(checkpoint_path) else None
+
+
+def initialize_weights(m, init_value=0.0):
+    if isinstance(m, nn.Linear):
+        print(f"HERE! : {m}")
+        init.constant_(m.weight, init_value)
+        init.constant_(m.weight[0, 0], 1.0)
+        init.constant_(m.weight[1, 1], 1.0)
+        if m.bias is not None:
+            init.constant_(m.bias, 0.0)
+
+def initialize_weights_act_net(m):
+    if isinstance(m, nn.Linear):
+        init.eye_(m.weight)
+        if m.bias is not None:
+            init.zeros_(m.bias)
 
 def main(args):
     algorithm = args.algo.upper()
@@ -140,21 +157,22 @@ def main(args):
     env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log, render_type=args.render_type)
     env = Monitor(env, log_dir)
     env = DummyVecEnv([lambda: env])
-    env = VecNormalize(env, norm_obs=True, norm_reward=True)
+    # env = VecNormalize(env, norm_obs=True, norm_reward=True)
 
     # Create evaluation environment
     eval_env = make_env(name, enable_reward_monitor=True, enable_wandb=args.wandb_log, render_type=args.render_type)
     eval_env = Monitor(eval_env, log_dir)
     eval_env = DummyVecEnv([lambda: eval_env])
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True)
+    # eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True)
 
     policy_kwargs = dict(
         features_extractor_class=NavigationNet,
-        features_extractor_kwargs=dict(features_dim=2),
+        features_extractor_kwargs=dict(features_dim=362),
         net_arch=dict(
-            pi=[16],
-            qf=[16]
-        )
+            pi=[2],
+            vf=[2]
+        ),
+        activation_fn=nn.ReLU,
     )
 
     # policy_kwargs = dict(
@@ -218,7 +236,7 @@ def main(args):
                 gamma=0.99,
                 gae_lambda=0.95,
                 clip_range=0.2,
-                ent_coef=0.0001,
+                ent_coef=0.001,
                 vf_coef=0.5,
                 max_grad_norm=0.5,
                 normalize_advantage=True,
@@ -259,14 +277,15 @@ def main(args):
     #     nn.Sigmoid()
     # )
 
-    print(f"TEST PRINT: MODEL POLICY: {model.policy}")
+    # print(f"TEST PRINT: MODEL POLICY: {model.policy}")
 
     # feature_ex = model.policy.features_extractor
     # print(f"TEST PRINT: FEATURE EXTRACTOR: {feature_ex}")
 
-    pretrained_fe_path = r"F:\Aerosim-Simulation-Zone\Try\FIGS_Bound\checkpoint_epoch_24000.pth"
+    pretrained_fe_path = r"Checkpoints/checkpoint_epoch_41500.pth"
     pretrained_state_dict = torch.load(pretrained_fe_path, weights_only=False)
 
+    # FREEZING FEATURE EXTRACTOR WEIGHTS
     if algorithm == "PPO":
         model.policy.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
 
@@ -306,11 +325,21 @@ def main(args):
         model.policy.critic.features_extractor.eval()
         model.policy.critic_target.features_extractor.eval() 
 
-        
+    # INITIALIZING POLICY WEIGHTS to DIRECT MAPPING
+    if algorithm == "PPO":
+        model.policy.mlp_extractor.apply(lambda m: initialize_weights(m, init_value=0.0))
+        model.policy.action_net.apply(lambda m: initialize_weights_act_net(m))
+    elif algorithm == "SAC":
+        model.policy.actor.latent_pi.apply(lambda m: initialize_weights(m, init_value=1.0))
+
+    print("\n=== Policy Weights ===")
+    for name, param in model.policy.named_parameters():
+        print(f"Name: {name}, values: {param.data}, Shape: {param.shape}")
+
     # Print complete model architecture
-    print("\n=== Complete Model Architecture ===")
-    print("\n1. Policy Network (Actor):")
-    print(f"Input Shape: {env.observation_space.shape}")
+    # print("\n=== Complete Model Architecture ===")
+    # print("\n1. Policy Network (Actor):")
+    # print(f"Input Shape: {env.observation_space.shape}")
     # print("\nMLP Extractor Policy Network:")
     # for name, module in model.policy.mlp_extractor.policy_net.named_children():
         # print(f"  {name}: {module}")
@@ -328,11 +357,11 @@ def main(args):
     # print(f"  Value Net: {model.policy.value_net}")
     
     # Print parameter counts
-    def count_parameters(model):
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # def count_parameters(model):
+    #     return sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    print("\n=== Parameter Counts ===")
-    print(f"Total Trainable Parameters: {count_parameters(model.policy):,}")
+    # print("\n=== Parameter Counts ===")
+    # print(f"Total Trainable Parameters: {count_parameters(model.policy):,}")
     # print(f"Policy Network Parameters: {count_parameters(model.policy.mlp_extractor.policy_net) + count_parameters(model.policy.action_net):,}")
     # print(f"Value Network Parameters: {count_parameters(model.policy.mlp_extractor.value_net) + count_parameters(model.policy.value_net):,}")
 
@@ -360,7 +389,6 @@ def main(args):
 
     total_timesteps = 1000000000
 
-
     callbacks = [
         CheckpointCallback(
             save_freq=10000,
@@ -385,7 +413,7 @@ def main(args):
             total_timesteps=total_timesteps,
             callback=callbacks,
             log_interval=10,
-            progress_bar=True
+            progress_bar=True,
         )
 
         final_model_path = f"{model_dir}/final_model_{algorithm}"
@@ -422,15 +450,25 @@ def evaluate_model(args, num_episodes=100):
     env = DummyVecEnv([lambda: env])
     # env = VecNormalize.load(f"models/vec_normalize.pkl", env)
 
-    policy_kwargs = {
-                "net_arch": dict(
-                    pi=[16, 32, 64, 32, 16],
-                    qf=[16, 32, 64, 32, 16]
-                ),
-                "activation_fn": nn.ReLU
-                # "optimizer_class": optim.AdamW,
-                # "optimizer_kwargs": dict(weight_decay=1e-5)
-            }
+    # policy_kwargs = {
+    #             "net_arch": dict(
+    #                 pi=[16, 32, 64, 32, 16],
+    #                 qf=[16, 32, 64, 32, 16]
+    #             ),
+    #             "activation_fn": nn.ReLU
+    #             # "optimizer_class": optim.AdamW,
+    #             # "optimizer_kwargs": dict(weight_decay=1e-5)
+    #         }
+
+    policy_kwargs = dict(
+        features_extractor_class=NavigationNet,
+        features_extractor_kwargs=dict(features_dim=362),
+        net_arch=dict(
+            pi=[2],
+            qf=[2]
+        ),
+        activation_fn=nn.ReLU,
+    )
 
     if model_path and algo == "SAC":   
         model = SAC.load(model_path)
@@ -499,31 +537,98 @@ def evaluate_model(args, num_episodes=100):
             verbose=1
             )
         
-    original_action_net = model.policy.action_net
-    model.policy.action_net = nn.Sequential(
-        original_action_net,
-        nn.Tanh()
-    )
-        
-    # Print complete model architecture
-    print("\n=== Complete Model Architecture ===")
-    print("\n1. Policy Network (Actor):")
-    print(f"Input Shape: {env.observation_space.shape}")
-    print("\nMLP Extractor Policy Network:")
-    for name, module in model.policy.mlp_extractor.policy_net.named_children():
-        print(f"  {name}: {module}")
-    
-    print("\nAction Network (Final layer):")
-    print(f"  Action Net: {model.policy.action_net}")
-    print(f"Output Shape: {env.action_space.shape}")
+    pretrained_fe_path = r"Checkpoints/checkpoint_epoch_41500.pth"
+    pretrained_state_dict = torch.load(pretrained_fe_path, weights_only=False)
 
-    print("\n2. Value Network (Critic):")
-    print("\nMLP Extractor Value Network:")
-    for name, module in model.policy.mlp_extractor.value_net.named_children():
-        print(f"  {name}: {module}")
+    if algo == "PPO":
+        model.policy.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+
+        for param in model.policy.features_extractor.parameters():
+            param.requires_grad = False
+            
+        # print("\n=== Feature Extractor Parameters ===")
+        # check if all the model weights are frozen
+        # for name, param in model.policy.features_extractor.named_parameters():
+            # print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        
+        # Setting em to evaluation mode to disable layers like dropout or batchnorm behavior
+        model.policy.features_extractor.eval()
+
+    elif algo == "SAC":
+        model.policy.actor.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+        model.policy.critic.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+        model.policy.critic_target.features_extractor.load_state_dict(pretrained_state_dict.state_dict())
+
+        for param in model.policy.actor.features_extractor.parameters():
+            param.requires_grad = False
+        for param in model.policy.critic.features_extractor.parameters():
+            param.requires_grad = False
+        for param in model.policy.critic_target.features_extractor.parameters():
+            param.requires_grad = False
+
+        # print("\n=== Feature Extractor Parameters ===")
+        # for name, param in model.policy.actor.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        # for name, param in model.policy.critic.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+        # for name, param in model.policy.critic_target.features_extractor.named_parameters():
+        #     print(f"Feature Extractor: {name}, Requires Grad: {param.requires_grad}")
+
+        # Setting em to evaluation mode to disable layers like dropout or batchnorm behavior
+        model.policy.actor.features_extractor.eval()
+        model.policy.critic.features_extractor.eval()
+        model.policy.critic_target.features_extractor.eval() 
     
-    print("\nValue Network (Final layer):")
-    print(f"  Value Net: {model.policy.value_net}")
+    if algo == "PPO":
+        # model.policy.mlp_extractor.apply(lambda m: initialize_weights(m, init_value=0.0))
+        # model.policy.action_net.apply(lambda m: initialize_weights_act_net(m))
+
+        m_weights = model.policy.mlp_extractor.policy_net[0].weight
+        m_bias = model.policy.mlp_extractor.policy_net[0].bias
+        m_tensor = torch.zeros_like(m_weights, device=m_weights.device)
+        m_tensor[0, 0] = 1.0
+        m_tensor[1, 1] = 1.0
+        model.policy.mlp_extractor.policy_net[0].weight.data = m_tensor
+        model.policy.mlp_extractor.policy_net[0].bias.data = torch.zeros_like(m_bias, device=m_bias.device)
+
+        print(f"M_weights_shape : {m_weights}")
+        print(f"M_bias_shape : {m_bias.shape}")
+
+        a_weights = model.policy.action_net.weight
+        a_bias = model.policy.action_net.bias
+        a_tensor = torch.eye(a_weights.shape[0], device=a_weights.device)
+        model.policy.action_net.weight.data = a_tensor
+        model.policy.action_net.bias.data = torch.zeros_like(a_bias, device=a_bias.device)
+
+        print(f"A_weights_shape : {a_weights}")
+        print(f"A_bias_shape : {a_bias.shape}")
+
+    elif algo == "SAC":
+        model.policy.actor.latent_pi.apply(lambda m: initialize_weights(m, init_value=1.0))
+
+    # print("\n=== Policy Weights ===")
+    # for name, param in model.policy.named_parameters():
+    #     print(f"Name: {name}, values: {param.data}, Shape: {param.shape}")
+        
+    # # Print complete model architecture
+    # print("\n=== Complete Model Architecture ===")
+    # print("\n1. Policy Network (Actor):")
+    # print(f"Input Shape: {env.observation_space.shape}")
+    # print("\nMLP Extractor Policy Network:")
+    # for name, module in model.policy.mlp_extractor.policy_net.named_children():
+    #     print(f"  {name}: {module}")
+    
+    # print("\nAction Network (Final layer):")
+    # print(f"  Action Net: {model.policy.action_net}")
+    # print(f"Output Shape: {env.action_space.shape}")
+
+    # print("\n2. Value Network (Critic):")
+    # print("\nMLP Extractor Value Network:")
+    # for name, module in model.policy.mlp_extractor.value_net.named_children():
+    #     print(f"  {name}: {module}")
+    
+    # print("\nValue Network (Final layer):")
+    # print(f"  Value Net: {model.policy.value_net}")
     
     # Print parameter counts
     def count_parameters(model):
@@ -565,10 +670,12 @@ def evaluate_model(args, num_episodes=100):
             episode_reward = 0
             
             while not done:
-                action, val = model.predict(obs, deterministic=True)
-                print(f"Observations: {obs}")
+                action, val = model.predict(obs, deterministic=False)
+                print("\n=== Policy Weights ===")
+                print(f"MLP: {model.policy.mlp_extractor.policy_net[0].weight}")
+                print(f"Action Net: {model.policy.action_net.weight}")
                 print(f"Action: {action}")
-                print(f"Value: {val}")
+                # print(f"Value: {val}")
                 obs, reward, done, info = env.step(action)
                 episode_reward += reward[0]
                 
