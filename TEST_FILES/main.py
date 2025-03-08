@@ -231,7 +231,7 @@ def main(args):
                 learning_rate=3e-4,
                 verbose=1,
                 n_steps=2048,
-                n_epochs=10,
+                n_epochs=20,
                 batch_size=64,
                 gamma=0.99,
                 gae_lambda=0.95,
@@ -372,22 +372,9 @@ def main(args):
 
     if args.policy:
         pretrained_policy = torch.load(args.policy)
-        pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
-        print("Model Policy:")
-        for key,_ in model.policy.state_dict().items():
-            print(key)
-        print("\n")
+        model.policy.load_state_dict(pretrained_policy)
 
-        print("Loaded Policy:")
-        for key in pretrained_policy['model_state_dict']:
-            print(key)
-        print("\n")
-
-        pretrained_policy['model_state_dict']['value_net.weight'] = model.policy.value_net.weight
-        pretrained_policy['model_state_dict']['value_net.bias'] = model.policy.value_net.bias
-        model.policy.load_state_dict(pretrained_policy['model_state_dict'])
-
-    total_timesteps = 1000000000
+    total_timesteps = 10_000_000
 
     callbacks = [
         CheckpointCallback(
@@ -646,20 +633,7 @@ def evaluate_model(args, num_episodes=100):
 
     if args.policy:
         pretrained_policy = torch.load(args.policy)
-        pretrained_policy['model_state_dict'] = {k.replace('_orig_mod.', ''): v for k, v in pretrained_policy['model_state_dict'].items()}
-        print("Model Policy:")
-        for key,_ in model.policy.state_dict().items():
-            print(key)
-        print("\n")
-
-        print("Loaded Policy:")
-        for key in pretrained_policy['model_state_dict']:
-            print(key)
-        print("\n")
-
-        pretrained_policy['model_state_dict']['value_net.weight'] = model.policy.value_net.weight
-        pretrained_policy['model_state_dict']['value_net.bias'] = model.policy.value_net.bias
-        model.policy.load_state_dict(pretrained_policy['model_state_dict'])
+        model.policy.load_state_dict(pretrained_policy)
 
     rewards = []
     

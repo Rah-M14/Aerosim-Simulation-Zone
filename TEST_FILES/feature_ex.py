@@ -75,6 +75,6 @@ class NavigationNet(BaseFeaturesExtractor):
 
         act = torch.stack([L.squeeze(-1), final_theta], dim=-1)
 
-        # print(f"Act Predicted: {act}")
+        # print(f"Action Predicted: {act}")
 
         return torch.cat((act, torch.tensor(observations['lidar_mask'], device=observations['vector'].device)), dim=-1)

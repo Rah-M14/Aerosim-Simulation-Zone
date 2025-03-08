@@ -199,6 +199,9 @@ class PathFollowingEnv(gym.Env):
         self.prev_pos = self.current_pos
         self.current_pos = pos
         # self.current_chunk = self.path_manager.get_next_chunk(self.current_pos)
+        # print(f"Previous Pos: {self.prev_pos}, Distance to Goal: {np.linalg.norm(self.prev_pos - self.goal_pos)}")
+        # print(f"Action Received : {action}, Agent Theta: {self.agent_theta}, Relative Theta: {self._get_observation()['vector'][-1]}")
+        # print(f"Current Pos: {self.current_pos}, Goal Pos: {self.goal_pos}, Distance to Goal: {np.linalg.norm(self.current_pos - self.goal_pos)}")
         
         observation = self._get_observation()
 
@@ -217,6 +220,8 @@ class PathFollowingEnv(gym.Env):
             timestep=self.current_step,
             lidar_dists=self.lidar_dists
         )
+
+        # print(f"Reward: {reward}, Reward Components: {reward_components}")
         
         self.episode_reward += reward
         
@@ -551,7 +556,7 @@ class PathFollowingEnv(gym.Env):
 
                 # Show the combined image
                 cv2.imshow(f'Path Following Environment - {self.name}', combined_img)
-                cv2.waitKey(1)
+                cv2.waitKey(100)
             
             except Exception as e:
                 print(f"Render error: {str(e)}")

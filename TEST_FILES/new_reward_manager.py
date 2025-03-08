@@ -11,9 +11,9 @@ class RewardManager:
 
         # Core Rews
         self.GOAL_REACHED_REWARD = 50.0
-        self.BOUNDARY_PENALTY = -self.GOAL_REACHED_REWARD
-        self.TIMEOUT_PENALTY = -self.GOAL_REACHED_REWARD
-        self.LIVE_REWARD = -5.0
+        self.BOUNDARY_PENALTY = -self.GOAL_REACHED_REWARD*10
+        self.TIMEOUT_PENALTY = -self.GOAL_REACHED_REWARD*10
+        self.LIVE_REWARD = -1.0
         
         # Potential Components
         self.GAMMA = 0.99
@@ -21,7 +21,7 @@ class RewardManager:
         self.ALPHA_PATH = 0.3
         
         # Progress Rews
-        self.PROGRESS_BASE = 10.0
+        self.PROGRESS_BASE = 2.0
         self.PATH_FOLLOW_BASE = 1.0
         self.HEADING_BASE = 10.0
         
@@ -40,6 +40,10 @@ class RewardManager:
         self.position_history = []
         self.reward_history = []
 
+        # Collisions
+        self.Prev_min_lidar = 10.0
+        self.COLL_FACTOR = 10.0
+
     def reset(self):
         self.prev_goal_potential = None
         self.prev_path_potential = None
@@ -52,17 +56,12 @@ class RewardManager:
         reward = 0.0
         
         goal_pot_rew, goal_pot = self.goal_pot_rew(current_pos, goal_pos, timestep)
-        
         progress_rew, progress = self.progress_rew(prev_pos, current_pos, goal_pos, timestep)
-        # progress_rew, progress = 0.0, 0.0
         heading_rew = self.heading_rew(current_pos, goal_pos, world_theta, timestep)
-        # heading_rew = 0.0
-                
         oscillation_penalty = self.oscillation_penalty(current_pos)
-        # oscillation_penalty = 0.0
-        coll_rew = self.collision_penalty(current_pos, lidar_dists, min_thresh=1.5)
+        coll_rew = self.collision_penalty(current_pos, prev_pos, lidar_dists, min_thresh=1.5)
 
-        reward = goal_pot_rew + progress_rew + heading_rew + oscillation_penalty + coll_rew + self.LIVE_REWARD 
+        reward = goal_pot_rew + coll_rew + self.LIVE_REWARD 
         
         # History Update
         self.prev_goal_potential = goal_pot
@@ -90,20 +89,10 @@ class RewardManager:
     def goal_pot_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
         current_goal_potential = self._goal_potential(current_pos, goal_pos)
         return -current_goal_potential, current_goal_potential
-        # if self.prev_goal_potential is None:
-        #     self.prev_goal_potential = current_goal_potential
-        # diff = self.prev_goal_potential - current_goal_potential
-
-        # if (timestep > 100 and diff <= 0):
-        #     return -current_goal_potential, current_goal_potential
-        # else:
-        #     return -current_goal_potential + diff, current_goal_potential
 
     def progress_rew(self, prev_pos: np.ndarray, current_pos: np.ndarray, goal_pos: np.ndarray, timestep: int) -> float:
         progress = self._compute_progress(prev_pos, current_pos, goal_pos)
-        if progress > self.MIN_PROGRESS_THRESHOLD:
-            return self.PROGRESS_BASE * progress, progress
-        return -5, 0.0
+        return self.PROGRESS_BASE * progress, progress
     
     def heading_rew(self, current_pos: np.ndarray, goal_pos: np.ndarray, world_theta: float, timestep: int) -> float:
         desired_heading = self._compute_desired_heading(current_pos, goal_pos)
@@ -120,16 +109,25 @@ class RewardManager:
             return (self.OSCILLATION_PENALTY_BASE * oscillation) - np.clip(penalty, 0.0, 100.0)
         return 0.0
     
-    def collision_penalty(self, current_pos: np.ndarray, lidar_dists: np.ndarray, min_thresh: float) -> float:
+    def collision_penalty(self, current_pos: np.ndarray, previous_pos: np.ndarray, lidar_dists: np.ndarray, min_thresh: float) -> float:
         if len(lidar_dists) == 0:
             print(f"Empty Lidar Dists")
             return 0.0
+        
         min_dist = np.min(lidar_dists)
+        p_min_dist = self.Prev_min_lidar
+        diff_dist = np.clip((min_dist - self.Prev_min_lidar), -min_thresh, min_thresh)
+        self.Prev_min_lidar = min_dist
+
         if min_dist < min_thresh:
-            coll_rew = np.clip(-5*np.exp(-(min_dist-min_thresh)), -np.inf, -5.0) + 5.0
-            return coll_rew
-        return 0.0
-    
+            if p_min_dist < min_thresh:
+                return diff_dist
+            return diff_dist*self.COLL_FACTOR
+        else:
+            if p_min_dist < min_thresh:
+                return diff_dist*self.COLL_FACTOR
+            return 0.0
+        # coll_rew = np.clip(-5*np.exp(-(min_dist-min_thresh)), -np.inf, -5.0) + 5.0
     
     def _goal_potential(self, current_pos: np.ndarray, goal_pos: np.ndarray) -> float:
         dist = np.linalg.norm(current_pos - goal_pos)
